@@ -196,16 +196,109 @@ count above already reflects this), committed and pushed to `main`
 Independent of everything above. Deliberately held off — see "Next
 steps" below for why.
 
-## Backend architecture gaps — found by reading the actual code against `architecture.md`, not by trusting this document
+## Backend architecture gaps — ALL 7 CLOSED, kept below as historical record
 
 These were surfaced by directly grepping/reading the backend source
 against each relevant section of `architecture.md`, specifically because
-this document has a demonstrated history of drift. **We will work
-through these one by one, in this order, each as its own short design
-doc with forked decisions approved before implementing — same discipline
-as every module before this.** None of them block starting the frontend
-on their own, but the plan is to close out backend-architecture
-conformance first before Phase 4 begins.
+this document has a demonstrated history of drift. **All seven were
+worked through one by one, each as its own short design doc with forked
+decisions approved before implementing, and all seven are now confirmed
+by the user's own real `pnpm test` runs** (final count: 179/179 tests
+across 18 files). Kept below, unedited, as the historical record of what
+was found and how each was resolved — a future session should NOT need
+to revisit any of these, only the new items in the section right after
+this one.
+
+## Newly discovered pre-frontend items — found by this session's own audit, NOT yet built, awaiting the user's call
+
+After the 7 gaps above were confirmed closed, the user asked to check for
+anything else outstanding before Phase 4. This section is the result of
+that check — a fresh pass over `architecture.md` Section 24 (the
+project's own "production readiness" / final-approval checklist) and the
+still-open TODOs this document had already flagged elsewhere (see
+"Current project state" above), re-verified against the actual code
+(`grep`/`find`, not assumption) as of this session. **None of these were
+part of the 7 numbered gaps above and none have been discussed with the
+user yet as their own design docs** — this is a discovery/audit pass
+only, not implementation. Presented in the order a next session should
+probably tackle them, with reasoning for that ordering, but the user gets
+final say.
+
+1. **Real on-chain-role enforcement is still missing on every
+   admin-facing write endpoint.** This is the "Recurring, deliberate,
+   still-open TODO" already named in "Current project state" above — not
+   new, but re-verified still true right now:
+   `election.routes.ts`/`admin.routes.ts`/`candidate.routes.ts`/
+   `ipfs.routes.ts` all gate their write endpoints with `requireAuth`
+   only (any authenticated wallet), never a real
+   `ELECTION_ADMINISTRATOR_ROLE`/`SYSTEM_ADMINISTRATOR_ROLE` check
+   (confirmed via `grep -n "requireAuth\|requireRole\|hasRole"` across
+   all four route files — zero role-check hits anywhere). The original
+   note said this was blocked on gap #1 (Wallet module) and gap #3 (rate
+   limiting) both landing first — **both are now done**, so this is
+   newly actionable, not newly discovered. Likely the highest-priority
+   item here: it's a real authorization gap, not a nice-to-have, though
+   it's been "harmless today" only because on-chain-transaction endpoints
+   still revert at the contract level for a non-admin caller regardless —
+   whether that revert-safety-net argument actually covers every
+   affected endpoint (vs. some being pure off-chain DB writes with no
+   on-chain step to fall back on, e.g. Candidate profile edits, Election
+   draft/link) has not been re-verified this session and should be the
+   first thing checked before deciding how urgent this really is.
+2. **The Wallet module (gap #1) still isn't called from anywhere.**
+   `toDisplayName`/`resolveEnsName`/etc. exist and are tested in
+   isolation, but `grep -rl "toDisplayName\|resolveEnsName" backend/src/modules/admin
+   backend/src/modules/notifications` returns nothing — confirmed still
+   true this session. Gap #1's own entry already flagged this as "a
+   natural follow-on, not scope creep into that gap." Lower priority than
+   item 1 above (a missing display nicety, not a security gap), but
+   genuinely dead code until something calls it.
+3. **No CI pipeline exists at all.** `architecture.md` Section 24's own
+   production-readiness list names "CI pipeline gating (GitHub Actions:
+   contract tests, Slither, backend tests, frontend build/lint, branch
+   protection)" explicitly. `find .github -type f` returns nothing —
+   there is no `.github/` directory anywhere in this repo. Unlike Slither
+   and Sepolia deployment (both explicitly, deliberately deferred per the
+   Contracts section above, the user's own call), CI was never flagged as
+   deferred anywhere in this document or `decisions-log.md` — it's a
+   genuine gap against the project's own stated checklist, not a
+   documented deferral. Worth a real decision (build it now vs.
+   explicitly defer it, the user's call either way) rather than it
+   silently continuing to not exist.
+4. **`/ready` and `/metrics` health-check endpoints don't exist.** Only
+   `/health` is wired in `app.ts` (confirmed via
+   `grep -n "'/health'\|'/ready'\|'/metrics'" backend/src/app.ts` — one
+   hit, `/health`, nothing else). `architecture.md`'s own "Additional
+   refinement" section is explicit that `/ready` (verifying
+   MongoDB/Redis connectivity) and `/metrics` were slated for "Phase 7
+   (Logging, Audit, and Configuration) alongside the rest of the
+   observability work" — Phase 7's other work (rate limiting, structured
+   logging, audit logging, the stalled-worker alert) is all done now, but
+   these two endpoints appear to have been missed along the way. Smaller
+   than items 1-3, genuinely useful for anything that will eventually
+   deploy this (load balancer health checks, monitoring), not blocking
+   for frontend work itself.
+5. **Four of six architecture sequence diagrams were never added.**
+   `architecture.md`'s own "Additional refinement" section says vote
+   casting and registration-approval diagrams shipped early, and "Create
+   Election, Register Voter, Event Processing, and Finalize Election
+   sequence diagrams will be added to this document during Phase 5/6
+   implementation, once their exact message shapes are finalized" —
+   confirmed via `grep -n "sequenceDiagram\|Sequence [Dd]iagram"
+   docs/architecture/architecture.md`, only the original two exist.
+   Documentation-only, zero runtime impact, lowest priority of the five —
+   but a real gap against what this document promised itself it would
+   contain, now that every message shape it was waiting on has long since
+   been finalized.
+
+**None of these block starting Phase 4 on purely technical grounds** —
+same framing the 7 gaps above used. Item 1 is the one with a real
+argument for going first anyway (it's a security posture question, not
+just architecture-doc conformance), but that's a recommendation, not a
+decision already made. Next session should present these to the user the
+same way the 7 gaps were presented — a short design doc + forked
+decisions per item the user chooses to act on, and explicit sign-off
+before any of it gets built.
 
 1. **Wallet module doesn't exist.** ~~Section 7.1 lists `Wallet`~~
    **STATUS: DONE, pending the user's own `pnpm test` confirmation (see
@@ -383,13 +476,118 @@ conformance first before Phase 4 begins.
      Consider `--no-file-parallelism` or a `pretest` cache-warm step if
      this needs to be permanently robust for CI/fresh-clone use, but
      that's optional polish, not a correctness bug.
-4. **Notifications are email-only, no webhook dispatch.** Section 7.1
+4. **Notifications are email-only, no webhook dispatch.** ~~Section 7.1
    specifies "email/webhook dispatch." Only `ConsoleNotificationSender`
-   and `ResendNotificationSender` exist (both email) — no webhook sender.
-5. **No stalled-worker CRITICAL alert.** Section 17's own severity table
+   and `ResendNotificationSender` exist (both email) — no webhook sender.~~
+   **STATUS: DONE, pending the user's own `pnpm test` confirmation (see
+   below) — this session's in-sandbox network restrictions couldn't run
+   the Mongo-dependent suite.** Built a full second dispatch channel,
+   deliberately kept independent of the email channel end to end (own
+   model, own queue, own worker — see each new file's header comment for
+   the specific reasoning): `webhookPreference.model.ts`,
+   `IWebhookSender.ts`, `HttpWebhookSender.ts` (concrete sender, signed
+   HTTP POST via `fetch`, no new dependency), `webhook.queue.ts`
+   (dedicated BullMQ queue), `webhook.worker.ts` (dedicated BullMQ
+   worker, started from `worker/worker.ts` alongside the other two).
+   Wired a new route (`POST /elections/:id/notifications/webhook-subscribe`)
+   and two new service functions (`subscribeToElectionWebhook`,
+   `enqueueElectionFinalizedWebhooks`, the latter called from
+   `eventSync.ts`'s `ElectionFinalized` handling right alongside the
+   existing email dispatch call). Test file:
+   `backend/test/notification/webhook.test.ts` (8 tests), mirroring
+   `notification.test.ts`'s structure. **Approved forked decisions** (all
+   three confirmed by the user before implementing):
+   - **Separate subscription, separate model** — `WebhookPreferenceModel`
+     is its own collection, not an optional `webhookUrl` column bolted
+     onto `NotificationPreferenceModel`. A webhook subscription carries a
+     secret that must never round-trip back out except in the
+     subscribe-response body itself; keeping it in a dedicated model
+     makes "don't leak the secret" structurally scoped to the one place
+     that touches it, rather than a rule every future
+     `NotificationPreferenceModel` reader/writer has to remember.
+   - **Signed payloads** — Stripe/GitHub-style timestamped HMAC-SHA256,
+     not a bare signature over the body. `X-Webhook-Timestamp` (ms epoch)
+     and `X-Webhook-Signature: sha256=<hex HMAC of
+     "${timestamp}.${body}">`, using a per-subscription secret generated
+     server-side (`node:crypto`'s `randomBytes(32)`) at subscribe time —
+     never client-supplied. The secret is returned to the caller exactly
+     once, in the subscribe response; re-subscribing (same election +
+     wallet) rotates it to a fresh value. This class does not itself
+     enforce a replay window on the timestamp — that's the receiver's own
+     concern, same as any real webhook provider's docs would say.
+   - **Dedicated queue/worker** — `webhook-dispatch` is its own BullMQ
+     queue and `Worker`, not a discriminated-union job type folded into
+     the existing `notification-dispatch` queue. An unreachable or slow
+     third-party endpoint retrying with its own backoff must never share
+     retry/concurrency/backpressure with email delivery, whose failure
+     modes (a Resend API error) are unrelated.
+   - **Known, explicitly out-of-scope limitation** (flagged in
+     `HttpWebhookSender.ts`'s own header comment, not silently assumed
+     away): no SSRF hardening on the subscriber-supplied URL (e.g.
+     rejecting internal/private IP ranges). Validated only as a
+     well-formed URL (`zod .url()`), same validation depth as the email
+     channel's `.email()`. Worth a future security-hardening pass if this
+     ever accepts subscriptions from untrusted third parties at scale.
+   - Verified in-sandbox: `tsc --noEmit` clean, `eslint .` 0 errors,
+     `npx vitest run` → the 6 suites that don't need
+     `mongodb-memory-server` all still pass, 42/42, unchanged from gap
+     #5's confirmed baseline (`webhook.test.ts` itself needs Mongo, so
+     it's in the same documented `fastdl.mongodb.org`-blocked bucket as
+     `notification.test.ts` — couldn't be run at all in-sandbox, not just
+     partially). **CONFIRMED by the user's real `pnpm test` run: 17/17
+     files, 167/167 tests passing** — every one of the prior 16 files'
+     counts unchanged, `test/notification/webhook.test.ts` at 8/8 as
+     predicted. Gap #4 is fully done, not just in-sandbox-verified.
+5. **No stalled-worker CRITICAL alert.** ~~Section 17's own severity table
    cites *"Worker has not processed a new block in 10 minutes"* as the
    canonical CRITICAL-level example — nothing in `eventSync.ts`/
-   `worker.ts` actually detects or logs that condition today.
+   `worker.ts` actually detects or logs that condition today.~~ **STATUS:
+   DONE, pending the user's own `pnpm test` confirmation (see below) —
+   this session's in-sandbox network restrictions couldn't run the
+   Mongo-dependent suites.** Built
+   `backend/src/modules/indexing/stallDetector.ts` (pure state machine,
+   `evaluateStall`/`initialStallDetectorState`, zero Mongo/pino
+   dependency) plus `backend/test/indexing/stallDetector.test.ts` (9
+   tests), and wired a thin I/O wrapper (`checkForWorkerStall()`) into
+   `backend/worker/worker.ts`'s existing `pollOnce()` — runs after every
+   poll attempt, success or failure. **Approved forked decisions** (all
+   three confirmed by the user before implementing):
+   - **Current-block source**: reuses the checkpoint data
+     `eventSync.ts`'s `saveCheckpoint()` already writes to
+     `WorkerCheckpointModel` every cycle (`MAX(lastProcessedBlock)` across
+     all event rows), rather than a dedicated extra
+     `client.getBlockNumber()` call. The MAX (not e.g. the MIN or any
+     single event's row) is deliberate: `syncAllEvents()` isolates each
+     event definition's failures from the others, so one event type
+     erroring must not by itself make the whole worker look stalled while
+     every other event type is still keeping up fine.
+   - **Emission mechanism**: `"fatal"` added to `LOG_LEVEL`'s zod enum in
+     `env.ts`, log emitted via pino's own built-in `.fatal()` (one level
+     above `.error()`) — not a `severity: "CRITICAL"` field bolted onto
+     `.error()`. First use of `.fatal()` anywhere in this codebase.
+   - **Threshold**: new `WORKER_STALL_CRITICAL_MS` env var (default
+     `600_000`, i.e. 10 minutes, matching Section 17's own example
+     exactly), not a hardcoded constant — added to `env.ts`'s existing
+     "Worker config (Phase 6, Section 8)" section and documented in
+     `.env.example`.
+   - **Not separately asked, applied as a small implementation default**:
+     the alert fires once per stall episode (not once per poll cycle
+     while still stalled — that would spam the log every
+     `RECOMMENDED_POLL_INTERVAL_MS`), and logs a one-time `info`-level
+     recovery message when the checkpoint advances again afterward. Both
+     behaviors are covered by `stallDetector.test.ts`; flag if a
+     different repeat/throttle policy is wanted instead.
+   - Verified in-sandbox: `tsc --noEmit` clean, `eslint .` 0 errors,
+     `npx vitest run` → the 6 suites that don't need
+     `mongodb-memory-server` (env, middleware/rateLimiter,
+     config/swagger, wallet/wallet.provider.configured,
+     indexing/stallDetector — 9/9 passing) all green, 42/42 tests. The
+     other 10 suites failed only on the already-documented
+     `fastdl.mongodb.org` sandbox restriction, nothing new. **CONFIRMED
+     by the user's real `pnpm test` run: 16/16 files, 159/159 tests
+     passing** — every one of the prior 15 files' counts unchanged,
+     `test/indexing/stallDetector.test.ts` at 9/9 as predicted. Gap #5 is
+     fully done, not just in-sandbox-verified.
 6. **Analytics trigger mechanism deviates from the doc.** **STATUS: DONE,
    pending the user's own `pnpm test` confirmation** — this session's
    in-sandbox network restrictions couldn't run the Mongo-dependent
@@ -425,11 +623,77 @@ conformance first before Phase 4 begins.
      passing** — unchanged from the prior confirmed count, exactly as
      expected since no test file or logic was added/modified by this
      gap. Gap #6 is fully done, not just in-sandbox-verified.
-7. **Election-start reminder notification not built.** Needs a wall-clock/
-   cron trigger this codebase doesn't have anywhere yet (everything here
-   reacts to chain events or HTTP requests, nothing runs on a schedule).
-   Smaller than the other six; fold into whichever session is most
-   convenient.
+7. **Election-start reminder notification not built.** ~~Needs a
+   wall-clock/cron trigger this codebase doesn't have anywhere yet
+   (everything here reacts to chain events or HTTP requests, nothing
+   runs on a schedule). Smaller than the other six; fold into whichever
+   session is most convenient.~~ **STATUS: DONE, pending the user's own
+   `pnpm test` confirmation (see below) — this session's in-sandbox
+   network restrictions couldn't run the Mongo-dependent suite.** Built
+   the first wall-clock-scheduled trigger in this codebase:
+   `electionStartScan.queue.ts` (a BullMQ *repeatable* job, registered
+   once at bootstrap, distinct in kind from every other queue here — it
+   has no single recipient/trigger, it reads Mongo on its own schedule)
+   and `electionStartScan.worker.ts` (`runElectionStartScan`, the actual
+   scan: queries `IndexedElectionModel` by wall-clock time against
+   `startTime`/`endTime`, dispatches through the *existing* email/webhook
+   delivery queues from gap #4). Added a dedicated opt-in route
+   (`POST /elections/:id/notifications/start-reminder-subscribe`) and one
+   new service function (`subscribeToElectionStartReminders`) plus four
+   new dispatch functions (`enqueueElectionStartingSoonNotifications`/
+   `Webhooks`, `enqueueVotingOpenNotifications`/`Webhooks`), mirroring the
+   existing finalized-notification pair exactly. Test file:
+   `backend/test/notification/electionStartReminder.test.ts` (12 tests).
+   **Approved forked decisions** (all three confirmed by the user before
+   implementing):
+   - **Fires on both**: an advance "starting soon" reminder (configurable
+     lead time before `startTime`) AND a separate "voting is now open"
+     notice (fired once `startTime` has passed but before `endTime`) —
+     two independently-dedup'd events, not one.
+   - **BullMQ repeatable job**, not a bare `setInterval` in `worker.ts` —
+     reuses the same Redis-backed queue infrastructure gaps #4/#6 already
+     established (Section 8-consistent), rather than a fifth ad hoc
+     timing mechanism.
+   - **Separate, dedicated opt-in** (`wantsStartReminders`, a new boolean
+     field added to *both existing* preference models —
+     `NotificationPreferenceModel` and `WebhookPreferenceModel` — default
+     `false`) rather than reusing the plain existence of a finalization
+     subscription as implicit consent. Unlike gap #4's webhook/email
+     split (a different delivery *mechanism* entirely, hence a wholly
+     separate model), this is the same delivery mechanism and recipient
+     identity, just an additional lifecycle *event type* to opt into — so
+     it's a field on the same document, not a new collection. The new
+     endpoint only flips this flag on an *already-existing* row (email
+     and/or webhook, whichever the caller has) — it returns 404
+     `NOT_SUBSCRIBED` if the caller has subscribed to neither channel yet
+     for that election, and never rotates the webhook signing secret.
+   - **New config, following gap #5's established precedent** (not
+     separately re-asked): `ELECTION_START_SCAN_INTERVAL_MS` (how often
+     the scan runs, default 5 min) and
+     `ELECTION_START_REMINDER_LEAD_TIME_MS` (how far before `startTime`
+     the "starting soon" reminder fires, default 1 hour) — both new
+     configurable env vars in `env.ts`/`.env.example`, same
+     "operational threshold, not a fixed protocol constant" reasoning
+     that justified `WORKER_STALL_CRITICAL_MS`.
+   - **Dedup discipline, explicitly flagged as a known limitation**:
+     `startReminderSentAt`/`votingOpenNotifiedAt` on `IndexedElectionModel`
+     are read-then-written, not atomic — safe today because ADR-002 means
+     exactly one worker process ever runs this, but
+     `electionStartScan.worker.ts`'s own header comment flags the exact
+     fix (`findOneAndUpdate` with the null-check baked into the filter)
+     needed if that single-worker-process assumption ever changes.
+   - Verified in-sandbox: `tsc --noEmit` clean, `eslint .` 0 errors,
+     `npx vitest run` → the 6 suites that don't need
+     `mongodb-memory-server` all still pass, 42/42, unchanged from gap
+     #4's confirmed baseline (`electionStartReminder.test.ts` itself
+     needs Mongo, so it's in the same documented
+     `fastdl.mongodb.org`-blocked bucket as every other DB-backed suite —
+     couldn't be run at all in-sandbox). **CONFIRMED by the user's real
+     `pnpm test` run: 18/18 files, 179/179 tests passing** — every one of
+     the prior 17 files' counts unchanged,
+     `test/notification/electionStartReminder.test.ts` at 12/12 as
+     predicted. Gap #7 is fully done, not just in-sandbox-verified.
+     **All seven backend architecture gaps are now closed.**
 
 ## Next steps
 
@@ -438,26 +702,14 @@ conformance first before Phase 4 begins.
 2. **Confirm no other AI agent is concurrently editing this working
    tree** before making any changes — see the "Non-obvious lessons" entry
    above for why this matters concretely, not just in the abstract.
-3. Work through the remaining 3 backend architecture gaps (#4, #5, #7)
-   one at a time, each with its own short design doc and approved forked
-   decisions before implementing. **Gaps #1 (Wallet module), #2
-   (Swagger/`/api-docs`), #3 (rate limiting), and #6 (Analytics trigger
-   ADR) are all fully DONE** - confirmed by the user's real `pnpm test`
-   runs, 150/150 across 15 files is the current authoritative count.
-   All three remaining gaps (#4 webhook notifications, #5 stalled-worker
-   CRITICAL alert, #7 election-start reminder) introduce a genuinely new
-   mechanism each (a webhook sender, a stalled-worker alert, a cron
-   trigger this codebase doesn't have anywhere yet) — pick based on
-   which is most useful to have next, there's no ordering dependency
-   between them. Session recommendation: **#5 (stalled-worker alert)**
-   first — it's operational safety for the worker itself (detecting it
-   silently falling behind), self-contained within the existing polling
-   loop, and doesn't require introducing a new trigger mechanism the way
-   #7 does.
-4. **Phase 4 (Frontend)** starts only after the above is resolved, per the
-   user's explicit call — not because the gaps technically block frontend
-   work, but to make sure the frontend is built against a backend that
-   fully matches its own architecture doc first.
+3. **All seven backend architecture gaps are now fully DONE and
+   confirmed** by the user's real `pnpm test` runs — 179/179 across 18
+   files is the current authoritative count. Nothing left to build on
+   the backend before Phase 4.
+4. **Phase 4 (Frontend)** starts now, per the user's explicit call — not
+   because the gaps technically blocked frontend work, but to make sure
+   the frontend is built against a backend that fully matches its own
+   architecture doc first. That condition is now satisfied.
 
 ## Files worth knowing about at repo root
 - `PHASE2_STATUS.md`, `PHASE3_MANIFEST.md` — prior session status notes,

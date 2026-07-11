@@ -41,7 +41,7 @@ Engineer (design pass)
 - **New Section 16 — Election State Machine:** replaces the informal
   lifecycle description with formal states/transitions.
 - **New Section 17 — Logging and Audit Strategy.**
-- **New Section 18 — Configuration Management.**
+`- **New Section 18 — Configuration Management.**
 - Folder structure, technology stack, and roadmap updated to reflect domain
   modules, the Blockchain Service Layer, and the worker process.
 - All other sections (functional/non-functional requirements, frontend
