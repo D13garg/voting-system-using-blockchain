@@ -27,7 +27,7 @@ import { getNewLogs } from "../blockchain/events.js";
 import { getPublicClient } from "../blockchain/provider.js";
 import { logger } from "../../shared/logger.js";
 import { enqueueRollupRecompute } from "../analytics/analytics.queue.js";
-import { enqueueElectionFinalizedNotifications } from "../notifications/notification.service.js";
+import { enqueueElectionFinalizedNotifications, enqueueElectionFinalizedWebhooks } from "../notifications/notification.service.js";
 import { recordAuditLog } from "../audit/audit.service.js";
 import { IndexedVoteEventModel } from "./indexedVoteEvent.model.js";
 import { IndexedChainEventModel } from "./indexedChainEvent.model.js";
@@ -303,6 +303,7 @@ async function handleElectionMirrorLogs(
       const mirror = await IndexedElectionModel.findOne({ electionId }).lean();
       const title = mirror?.title ?? `Election #${electionId}`;
       await enqueueElectionFinalizedNotifications(electionId, title);
+      await enqueueElectionFinalizedWebhooks(electionId, title);
       // Section 17 audit entry: election state transition.
       await recordAuditLog({
         category: "ELECTION_FINALIZED",

@@ -40,6 +40,18 @@
 // per-document idempotency key (this collection has one document per
 // ELECTION, aggregating many events over time, not one document per
 // event).
+//
+// startReminderSentAt / votingOpenNotifiedAt (gap #7, election-start
+// reminder): these are the "already sent" dedup markers for the
+// wall-clock scan in electionStartScan.worker.ts - the first thing in
+// this codebase that fires on a schedule rather than reacting to a
+// chain event or HTTP request, so there is no natural at-most-once
+// delivery from an event log the way ElectionFinalized gets one. A scan
+// tick that finds startReminderSentAt already set for an election simply
+// skips it - see electionStartScan.worker.ts for the full read-check-set
+// sequence and its own note on why that's an acceptable (not
+// exactly-once, but effectively-once for a single-worker-process
+// deployment) guarantee.
 
 import mongoose, { Schema } from "mongoose";
 
@@ -52,6 +64,10 @@ export interface IndexedElectionDocument extends mongoose.Document {
   finalized: boolean;
   finalizedBy?: string | null;
   candidateIds: number[];
+  /** Set once the gap #7 "starting soon" reminder has been dispatched for this election. Unset = not yet sent. */
+  startReminderSentAt?: Date | null;
+  /** Set once the gap #7 "voting is now open" notice has been dispatched for this election. Unset = not yet sent. */
+  votingOpenNotifiedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -66,6 +82,8 @@ const indexedElectionSchema = new Schema<IndexedElectionDocument>(
     finalized: { type: Boolean, required: true, default: false },
     finalizedBy: { type: String, default: null },
     candidateIds: { type: [Number], default: [] },
+    startReminderSentAt: { type: Date, default: null },
+    votingOpenNotifiedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

@@ -62,6 +62,27 @@ const envSchema = z.object({
   // should set this explicitly to the real Sepolia deployment block.
   WORKER_START_BLOCK: z.coerce.bigint().default(0n),
 
+  // How long the worker's checkpoint can go without advancing before it's
+  // treated as a CRITICAL-severity stall (architecture Section 17's own
+  // canonical example: "Worker has not processed a new block in 10
+  // minutes"). See src/modules/indexing/stallDetector.ts. Configurable
+  // rather than hardcoded because "how long is too long" is an
+  // operational/alerting-threshold call, not a fixed protocol constant
+  // the way WORKER_START_BLOCK's semantics are.
+  WORKER_STALL_CRITICAL_MS: z.coerce.number().int().positive().default(600_000),
+
+  // Gap #7 (election-start reminder). ELECTION_START_SCAN_INTERVAL_MS is
+  // the BullMQ repeatable job's own interval - how often the scan runs,
+  // not how far in advance it warns. ELECTION_START_REMINDER_LEAD_TIME_MS
+  // is that separate "how far in advance" question - see
+  // electionStartScan.worker.ts. Both configurable env vars, not
+  // hardcoded constants, following the same "operational threshold, not
+  // a fixed protocol value" reasoning WORKER_STALL_CRITICAL_MS's own
+  // comment above gives (and the same approved-decision precedent from
+  // gap #5).
+  ELECTION_START_SCAN_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+  ELECTION_START_REMINDER_LEAD_TIME_MS: z.coerce.number().int().positive().default(3_600_000),
+
   // --- IPFS config ---
   IPFS_API_KEY: z.string().min(1),
   IPFS_API_SECRET: z.string().min(1),
@@ -95,7 +116,12 @@ const envSchema = z.object({
 
   // --- Process-level ---
   API_PORT: z.coerce.number().int().positive().default(4000),
-  LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  // "fatal" added alongside architecture Section 17's CRITICAL severity
+  // tier (see stallDetector.ts) - pino's own built-in level, one step
+  // above "error", used only for system-level failures requiring
+  // immediate response (e.g. the worker stall alert), never for ordinary
+  // request/job-level errors.
+  LOG_LEVEL: z.enum(["debug", "info", "warn", "error", "fatal"]).default("info"),
 
 
 

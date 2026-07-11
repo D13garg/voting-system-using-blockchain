@@ -14,16 +14,30 @@
 // client-supplied - same "own address only" pattern as Voting's
 // has-voted check) plus an email they choose to provide.
 //
-// SCOPE NOT SOLVED HERE: only the ElectionFinalized lifecycle event is
-// wired to actually dispatch (see eventSync.ts and
+// SCOPE NOT SOLVED HERE (originally): only the ElectionFinalized
+// lifecycle event was wired to actually dispatch (see eventSync.ts and
 // notification.service.ts's dispatchElectionFinalizedNotifications) -
 // the one lifecycle event Section 8's state-machine table explicitly
 // names ("Worker locks the AnalyticsRollup as final; triggers
-// notifications"). Election-start reminders are a real future need but
-// would require a scheduled/cron-style trigger (nothing here currently
-// runs on a wall-clock schedule, only in reaction to chain events) -
-// deliberately left as a flagged, not-yet-built follow-up, not silently
-// assumed to be covered by this collection's existence.
+// notifications"). Election-start reminders were flagged here as a real
+// future need requiring a scheduled/cron-style trigger nothing in this
+// codebase had yet.
+//
+// GAP #7 (now built): wantsStartReminders below is that opt-in, added as
+// a field on this SAME document rather than a new model - approved
+// forked decision, distinct from gap #4's webhook-preference split.
+// Unlike gap #4 (a different delivery MECHANISM entirely - HTTP POST vs.
+// email, needing its own secret/signing concerns a shared document would
+// leak into the wrong code paths), this is the same delivery mechanism
+// and the same recipient identity, just an additional lifecycle EVENT
+// TYPE a subscriber can ask to also receive. A dedicated opt-in endpoint
+// (POST .../notifications/start-reminder-subscribe) sets this flag on an
+// ALREADY-EXISTING row - it does not create one on its own, since "start
+// reminders" without at least one delivery channel (email or webhook)
+// already registered would have nowhere to go. See
+// notification.service.ts's subscribeToElectionStartReminders and
+// electionStartScan.worker.ts for the scheduled scan that reads this
+// flag.
 
 import mongoose, { Schema } from "mongoose";
 
@@ -32,6 +46,8 @@ export interface NotificationPreferenceDocument extends mongoose.Document {
   /** Always lowercased - same case-sensitivity convention as IndexedVoterRegistration's voterAddress. */
   walletAddress: string;
   email: string;
+  /** Gap #7 opt-in flag - see this file's header comment. Default false: existing rows from before gap #7 must not start receiving a notification type they never asked for. */
+  wantsStartReminders: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -41,6 +57,7 @@ const notificationPreferenceSchema = new Schema<NotificationPreferenceDocument>(
     electionId: { type: Number, required: true },
     walletAddress: { type: String, required: true },
     email: { type: String, required: true },
+    wantsStartReminders: { type: Boolean, required: true, default: false },
   },
   { timestamps: true },
 );

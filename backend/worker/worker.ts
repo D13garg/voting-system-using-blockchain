@@ -20,6 +20,23 @@
 // BullMQ workers only ever react to jobs that eventSync.ts enqueues after
 // its own writes, they never touch the chain or read logs themselves.
 //
+// Gap #4 (webhook notifications): a THIRD BullMQ worker, webhook.worker.ts,
+// added below alongside the other two - same "only reacts to jobs
+// eventSync.ts enqueues" property, deliberately its own queue/worker
+// rather than folded into notification.worker.ts (see webhook.queue.ts's
+// header comment for why).
+//
+// Gap #7 (election-start reminder): a FOURTH BullMQ worker/queue pair,
+// electionStartScan.worker.ts/electionStartScan.queue.ts, is different in
+// kind from the other three - it does NOT react to a job eventSync.ts
+// enqueues. It's a repeatable job (registered once via
+// scheduleElectionStartScan() below) that fires on its own wall-clock
+// schedule and does its own IndexedElectionModel reads - the first thing
+// in this file that isn't purely reactive to chain events or other
+// workers' output. See electionStartScan.worker.ts's header comment for
+// why nothing here can react to an on-chain "voting opened" event (there
+// isn't one).
+//
 // NOTE on the unconditional bootstrap() call below (unlike src/app.ts,
 // which needed an env.NODE_ENV !== "test" guard around its own
 // listen()-on-import side effect): this file is never imported by any
@@ -34,6 +51,16 @@ import { syncAllEvents } from "../src/modules/indexing/eventSync.js";
 import { RECOMMENDED_POLL_INTERVAL_MS } from "../src/modules/blockchain/events.js";
 import { startAnalyticsRollupWorker } from "../src/modules/analytics/analytics.worker.js";
 import { startNotificationWorker } from "../src/modules/notifications/notification.worker.js";
+import { startWebhookWorker } from "../src/modules/notifications/webhook.worker.js";
+import { scheduleElectionStartScan } from "../src/modules/notifications/electionStartScan.queue.js";
+import { startElectionStartScanWorker } from "../src/modules/notifications/electionStartScan.worker.js";
+import { WorkerCheckpointModel } from "../src/modules/indexing/checkpoint.model.js";
+import {
+  evaluateStall,
+  initialStallDetectorState,
+  type StallDetectorState,
+} from "../src/modules/indexing/stallDetector.js";
+import { env } from "../src/config/env.js";
 import type { Worker } from "bullmq";
 
 const workerLogger = logger.child({ service: "worker" });
@@ -42,6 +69,52 @@ let pollTimer: NodeJS.Timeout | undefined;
 let pollInFlight = false;
 let analyticsRollupWorker: Worker | undefined;
 let notificationDispatchWorker: Worker | undefined;
+let webhookDispatchWorker: Worker | undefined;
+let electionStartScanWorker: Worker | undefined;
+// Re-initialized with a fresh `now` at the top of bootstrap() below, so a
+// (re)started worker's stall clock starts from actual process-start time,
+// not module-import time.
+let stallState: StallDetectorState = initialStallDetectorState(Date.now());
+
+/**
+ * Gap #5 (stalled-worker CRITICAL alert, architecture Section 17). Reads
+ * the current max checkpoint block already written to Mongo by this same
+ * poll cycle's syncAllEvents() call (or whatever the last successful
+ * write was, if this cycle itself failed before writing anything) and
+ * feeds it to the pure evaluateStall() state machine. Runs after every
+ * poll attempt regardless of success/failure - see stallDetector.ts's
+ * header comment for why a fully-down RPC provider is exactly the case
+ * this must catch, not just per-event sync errors.
+ */
+async function checkForWorkerStall(): Promise<void> {
+  let currentMaxBlock: bigint | null = null;
+  try {
+    const latest = await WorkerCheckpointModel.findOne().sort({ lastProcessedBlock: -1 }).lean();
+    currentMaxBlock = latest?.lastProcessedBlock ?? null;
+  } catch (err) {
+    // A failure to even read the checkpoint collection (e.g. Mongo
+    // connectivity) is itself worth knowing about, but must not crash the
+    // poll loop or corrupt stallState - skip this cycle's evaluation and
+    // let the next one retry the read.
+    workerLogger.error({ err }, "Failed to read worker checkpoints for stall detection");
+    return;
+  }
+
+  const result = evaluateStall(stallState, currentMaxBlock, Date.now(), env.WORKER_STALL_CRITICAL_MS);
+  stallState = result.nextState;
+
+  if (result.shouldLogStall) {
+    workerLogger.fatal(
+      { currentMaxBlock: currentMaxBlock?.toString() ?? null, stalledForMs: result.stalledForMs },
+      `Worker has not processed a new block in over ${env.WORKER_STALL_CRITICAL_MS}ms`,
+    );
+  } else if (result.shouldLogRecovery) {
+    workerLogger.info(
+      { currentMaxBlock: currentMaxBlock?.toString() ?? null },
+      "Worker checkpoint is advancing again; stall condition cleared",
+    );
+  }
+}
 
 async function pollOnce(): Promise<void> {
   // Guards against a poll cycle overlapping with itself if one run ever
@@ -63,6 +136,7 @@ async function pollOnce(): Promise<void> {
     // couldn't be constructed), worth its own log line.
     workerLogger.error({ err }, "Unexpected error during event-sync poll cycle");
   } finally {
+    await checkForWorkerStall();
     pollInFlight = false;
   }
 }
@@ -70,9 +144,17 @@ async function pollOnce(): Promise<void> {
 async function bootstrap(): Promise<void> {
   await connectDatabase();
   workerLogger.info("Worker process started");
+  stallState = initialStallDetectorState(Date.now());
 
   analyticsRollupWorker = startAnalyticsRollupWorker();
   notificationDispatchWorker = startNotificationWorker();
+  webhookDispatchWorker = startWebhookWorker();
+  electionStartScanWorker = startElectionStartScanWorker();
+  // Idempotent - see scheduleElectionStartScan's own header comment on
+  // why calling this again on every bootstrap/restart is safe (BullMQ
+  // upserts the repeatable job by its jobId + repeat options, it doesn't
+  // accumulate a second independent ticker).
+  await scheduleElectionStartScan();
 
   // Run one pass immediately rather than waiting a full interval before
   // the first sync - a freshly (re)started worker catching up on a
@@ -84,7 +166,12 @@ async function bootstrap(): Promise<void> {
 async function shutdown(signal: string): Promise<void> {
   workerLogger.info({ signal }, "Worker process shutting down");
   if (pollTimer) clearInterval(pollTimer);
-  await Promise.all([analyticsRollupWorker?.close(), notificationDispatchWorker?.close()]);
+  await Promise.all([
+    analyticsRollupWorker?.close(),
+    notificationDispatchWorker?.close(),
+    webhookDispatchWorker?.close(),
+    electionStartScanWorker?.close(),
+  ]);
   await disconnectDatabase();
   process.exit(0);
 }
