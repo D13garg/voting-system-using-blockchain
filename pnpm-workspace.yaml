@@ -1,0 +1,30 @@
+packages:
+  - "contracts"
+  - "backend"
+  - "frontend"
+
+# Explicit allowlist for native build scripts. These are well-known,
+# legitimate Ethereum/crypto and infra dependencies (keccak/secp256k1 are
+# pulled in transitively by Hardhat/ethers; mongodb-memory-server downloads
+# a real mongod binary for isolated backend tests). Approving them
+# explicitly here, rather than via the interactive prompt, keeps the
+# decision reviewable in version control instead of buried in a local
+# pnpm state file.
+onlyBuiltDependencies:
+  - keccak
+  - secp256k1
+  - bufferutil
+  - utf-8-validate
+  - msgpackr-extract
+  - esbuild
+  - mongodb-memory-server
+  - "@scarf/scarf"
+allowBuilds:
+  '@scarf/scarf': false
+  bufferutil: false
+  esbuild: false
+  keccak: false
+  mongodb-memory-server: false
+  msgpackr-extract: false
+  secp256k1: false
+  utf-8-validate: false

@@ -1,0 +1,25 @@
+# API process image (ADR-002). Built from the same backend/ codebase as
+# Dockerfile.worker, differing only in the start command — this guarantees
+# both processes always run identical application code, never drifting
+# versions of shared logic (e.g., the Mongoose models they both depend on).
+
+FROM node:20-alpine AS base
+WORKDIR /app
+RUN corepack enable
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml* ./
+RUN pnpm install --frozen-lockfile --prod=false
+
+FROM deps AS build
+COPY . .
+RUN pnpm run build
+
+FROM base AS runtime
+ENV NODE_ENV=production
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY package.json ./
+
+EXPOSE 4000
+CMD ["node", "dist/app.js"]

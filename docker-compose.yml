@@ -1,0 +1,72 @@
+# Local development environment (architecture Section 19, Section 21
+# Phase 1). Runs MongoDB and Redis as infrastructure dependencies, plus the
+# API and worker as two separate services (ADR-002) built from the same
+# backend/ codebase with different Dockerfiles/start commands.
+#
+# The frontend is intentionally NOT containerized here — it runs via the
+# Vite dev server directly on the host (`pnpm --filter @dvs/frontend dev`),
+# since Vite's dev experience (HMR) is materially worse inside Docker and
+# there is no production-parity reason to containerize it locally.
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: dvs-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: dvs-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.api
+    container_name: dvs-api
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    ports:
+      - "4000:4000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: dvs-worker
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  mongodb-data:
+  redis-data:
