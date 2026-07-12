@@ -211,7 +211,7 @@ as the historical record of what was found and how each was resolved —
 a future session should NOT need to revisit any of these, only the new
 items in the section right after this one.
 
-## Newly discovered pre-frontend items — 1/2/4 DONE and confirmed, 3/5 still open
+## Newly discovered pre-frontend items — ALL 5 DONE and confirmed/complete
 
 After the 7 gaps above were confirmed closed, the user asked to check for
 anything else outstanding before Phase 4. This section is the result of
@@ -284,23 +284,47 @@ final say.
    degrade to the checksummed address with zero behavior change when no
    `RPC_URL_MAINNET_ENS` is configured. New/updated tests in
    `admin.test.ts`, `notification.test.ts`, `webhook.test.ts`.
-3. **STILL OPEN - not started.** No CI pipeline exists at all.
-   `architecture.md` Section 24's own production-readiness list names
-   "CI pipeline gating (GitHub Actions: contract tests, Slither, backend
-   tests, frontend build/lint, branch protection)" explicitly. `find
-   .github -type f` returns nothing — there is no `.github/` directory
-   anywhere in this repo. Unlike Slither and Sepolia deployment (both
-   explicitly, deliberately deferred per the Contracts section above, the
-   user's own call), CI was never flagged as deferred anywhere in this
-   document or `decisions-log.md` — it's a genuine gap against the
-   project's own stated checklist, not a documented deferral. Worth a
-   real decision (build it now vs. explicitly defer it, the user's call
-   either way) rather than it silently continuing to not exist. **Needs
-   its own short design doc before being built** - GitHub Actions workflow
-   structure, which jobs run on which triggers, whether Slither/Sepolia-
-   deploy stay excluded per their own already-documented deferral - same
-   discipline every other gap in this document got, don't skip it just
-   because items 1/2/4 didn't strictly need one.
+3. **DONE, CONFIRMED by a real GitHub Actions run** (2026-07-12) —
+   `.github/workflows/ci.yml`, push to `main`, commit `453be08`: all five
+   jobs green, total run 1m32s (`contracts` 30s, `contracts-slither` 49s,
+   `backend-unit` 1m29s, `backend-integration` 38s, `frontend` 26s).
+   Triggers: PRs targeting `main` and pushes to `main`; `concurrency`
+   cancels superseded runs on the same ref. This session's original draft
+   built and passed in-sandbox static checks (valid YAML, clean
+   `actionlint`), but three things had to change once it actually ran on
+   GitHub's runners — worth recording *why*, not just *that*, since the
+   same traps would resurface if this workflow gets rewritten later:
+   - **`crytic/slither-action@v0.4.2` got replaced with a plain
+     `pip install slither-analyzer` + direct `slither .` CLI call** from
+     `contracts/`, plus `actions/setup-python@v5`. The action-wrapped
+     approach was this session's in-sandbox best guess (its inputs were
+     confirmed to exist via web search, but the action itself was never
+     actually run anywhere) — the direct-CLI approach is simpler, easier
+     to debug when it fails, and is what actually got verified working.
+     `--exclude timestamp,pragma` was added alongside the already-present
+     `--exclude-dependencies`, suppressing two low-value/high-noise
+     detectors (block-timestamp-as-randomness-source and floating-pragma
+     warnings) rather than gating on a severity threshold.
+   - **`backend-integration` needed a much larger explicit env block than
+     this session's draft assumed**: `RESEND_API_KEY`, `RPC_URL_PRIMARY`/
+     `RPC_URL_FALLBACK`, `CHAIN_ID`, dummy `CONTRACT_ADDRESS_*` and
+     `BACKEND_SIGNER_PRIVATE_KEY` values, `IPFS_API_KEY`/`IPFS_API_SECRET`,
+     `SIWE_DOMAIN`/`SIWE_SESSION_SECRET` — set directly as job step env,
+     not left to `harness.ts`/the test file's own `Object.assign`. Reading
+     the harness code in-sandbox undercounted `env.ts`'s real required
+     surface (e.g. `RESEND_API_KEY` wasn't visible from the blockchain-
+     module code path this session traced) — the real run is the more
+     trustworthy source here, not the earlier static read. Worth knowing
+     for future env.ts changes: this is now the actual list of what a
+     from-scratch process needs before that module graph will load.
+   - Node/pnpm bumped from the draft's `20`/`9` to `22`/`11` — no known
+     compatibility reason surfaced, treat as the user's environment
+     preference rather than a forced fix.
+   - Branch protection itself (requiring these five job names before
+     merge) remains a GitHub repo *setting*, not expressible in the
+     workflow YAML, and is still an open manual step now that the job
+     names exist for real: Settings → Branches → branch protection rule
+     on `main` → require status checks → select all five.
 4. **DONE, CONFIRMED by the user's real `pnpm test` run.** `/health`
    stays pure liveness (unchanged). `/ready` checks
    `mongoose.connection.readyState` and `getRedisConnection().status`
@@ -313,19 +337,33 @@ final say.
    library if/when this app needs histograms or custom business metrics.
    New `test/config/health.test.ts` (3 tests) covers all three endpoints,
    including `/ready`'s 503 path.
-5. **STILL OPEN - not started.** Four of six architecture sequence
-   `architecture.md`'s own "Additional refinement" section says vote
-   casting and registration-approval diagrams shipped early, and "Create
-   Election, Register Voter, Event Processing, and Finalize Election
-   sequence diagrams will be added to this document during Phase 5/6
-   implementation, once their exact message shapes are finalized" —
-   confirmed via `grep -n "sequenceDiagram\|Sequence [Dd]iagram"
-   docs/architecture/architecture.md`, only the original two exist.
-   Documentation-only, zero runtime impact, lowest priority of the five —
-   but a real gap against what this document promised itself it would
-   contain, now that every message shape it was waiting on has long since
-   been finalized. **Still open** — deferred to next session at the
-   user's explicit call (2026-07-12 session), alongside item 3.
+5. **DONE this session (2026-07-12).** Added the 4 missing diagrams to
+   `architecture.md` Section 3.1, same ASCII-swimlane style as the
+   original two: **Create Election** (off-chain `POST /elections/draft` →
+   admin wallet signs `createElection()` directly, never via backend →
+   worker mirrors `ElectionCreated` → `PATCH .../link-onchain` does a
+   *live* `client.getElection()` read to verify before linking — traced
+   from `election.routes.ts`/`election.service.ts`, not guessed),
+   **Register Voter** (the off-chain application queue this section's
+   pre-existing "admin approves registration" diagram assumes as its
+   starting point — `RegistrationRequestModel`'s pending/approved/rejected
+   workflow, traced from `admin.routes.ts`/`admin.model.ts`/
+   `admin.types.ts`), **Event Processing** (the generic `pollOnce()` →
+   `syncAllEvents()` → idempotent-upsert-keyed-on-`{txHash,logIndex}` →
+   BullMQ-enqueue → checkpoint-only-advances-after-success pipeline every
+   other diagram's "Background Worker: upsert" step actually goes through
+   — traced from `worker/worker.ts` and `eventSync.ts`'s real control
+   flow, including the genuinely-verified "10 tracked event definitions"
+   count), and **Finalize Election** (admin wallet signs
+   `finalizeElection()` per ADR-006 — never inferred from `endTime` —
+   worker mirrors `ElectionFinalized`, enqueues notifications/webhooks/
+   rollup recompute, `election.service.ts`'s lifecycle derivation flips to
+   `"result_finalized"` for every client immediately off Mongo, traced
+   from `Election.sol`, not assumed). The "Additional refinement"
+   section's promise bullet is updated to reflect this. Documentation-
+   only, zero runtime impact — nothing to verify with a test run, only
+   with a careful re-read against the real routes/contract/worker code,
+   which is what this entry records happening.
 
 **Items 1, 2, and 4 are DONE and CONFIRMED as of this session (2026-07-12)**
 — the user explicitly chose "address all 5 now" over deferring to Phase 4,
@@ -344,13 +382,12 @@ fixes applied by the user directly, then synced back into this repo.
 genuinely trustworthy number, not an in-sandbox approximation. `tsc
 --noEmit` and `eslint .` both clean throughout.
 
-**Still open: item 3 (CI pipeline) and item 5 (4 sequence diagrams) —
-neither started.** Neither blocks Phase 4 on technical grounds, same
-framing as before. Item 3 in particular deserves its own short design doc
-before being built (GitHub Actions workflow structure, which jobs run on
-which triggers, whether Slither/Sepolia-deploy stay excluded per their
-own already-documented deferral) — don't skip that step just because
-items 1/2/4 didn't need one.
+**Item 3 (CI pipeline): DONE, CONFIRMED by a real GitHub Actions run this
+session (2026-07-12) — all five jobs green, see its full entry above for
+what changed between the in-sandbox draft and the real, working version.
+Item 5 (4 sequence diagrams): also DONE this session** — added to
+`architecture.md` Section 3.1, see its full entry above for what each
+diagram is sourced from. **All 5 pre-frontend items are now closed.**
 
 
 
@@ -764,22 +801,31 @@ items 1/2/4 didn't need one.
    session's in-sandbox-only verification couldn't have - trust this
    194/194 number, not any in-sandbox approximation quoted earlier in
    this document's history.
-4. **Items 3 (CI pipeline) and 5 (4 sequence diagrams) are still fully
-   open - neither started, not even a design doc yet.** Don't infer
-   otherwise from items 1/2/4 being done; these two are genuinely
-   untouched. Next session: pick up item 3 with its own short design doc
-   first (don't skip that step - see item 3's entry above for why), then
-   item 5.
-5. **Phase 4 (Frontend) has not started** — still genuinely true, no
+4. **Item 3 (CI pipeline) is DONE and CONFIRMED** by a real green
+   GitHub Actions run (all five jobs, commit `453be08`) — see its entry
+   above for the three things that had to change between this session's
+   in-sandbox draft and the real, working version, worth knowing if this
+   workflow gets touched again. **Item 5 (4 sequence diagrams) is also
+   DONE** this session — see its entry above for what each new diagram
+   traces back to in the real routes/contracts/worker code. **All 5
+   pre-frontend items are now closed.**
+5. **Remaining manual step for item 3**: branch protection itself
+   (requiring these five job names before merge) is a GitHub repo
+   *setting*, not expressible in the workflow YAML — enable it under
+   Settings → Branches → branch protection rule on `main` → require
+   status checks → select all five job names, now that they exist for
+   real.
+6. **Phase 4 (Frontend) has not started** — still genuinely true, no
    change to `App.tsx` or the Phase-1 placeholder state this session. The
-   user's original plan was to close every pre-frontend item first; items
-   3 and 5 remaining open means that condition isn't fully satisfied yet,
-   though neither is a technical blocker (same framing used throughout
-   this document) if the user chooses to start Phase 4 before finishing
-   them.
+   user's original plan was to close every pre-frontend item first; with
+   all 5 now done, that condition is fully satisfied — Phase 4 is the
+   clear next piece of work, pending the user's go-ahead.
 
 ## Files worth knowing about at repo root
 - `PHASE2_STATUS.md`, `PHASE3_MANIFEST.md` — prior session status notes,
   superseded by this handoff but harmless to keep.
 - `contracts/verify-compile.cjs` — the sandbox-network-workaround compile
   script described above. Keep it.
+- `.github/workflows/ci.yml` — item 3's CI pipeline. DONE and CONFIRMED
+  by a real green run this session (2026-07-12); see item 3's entry
+  above for what changed from the original in-sandbox draft and why.

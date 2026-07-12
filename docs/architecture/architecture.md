@@ -256,9 +256,164 @@ Admin (Frontend)   Blockchain         Background Worker      MongoDB           B
       │                  │                    │                  │─────────────────►│─────────────────►│
 ```
 
-In both diagrams, the backend never initiates a state-changing transaction on
-a user's behalf — only the actual wallet does. The worker's only write path
-into MongoDB is triggered by confirmed on-chain events.
+In all six diagrams below, the backend never initiates a state-changing
+transaction on a user's behalf — only the actual wallet does. The worker's
+only write path into MongoDB is triggered by confirmed on-chain events.
+
+**Sequence diagram — Create Election:**
+
+```
+Admin (Frontend)     Backend API        Admin Wallet      Blockchain      Background Worker    MongoDB
+      │                    │                   │               │                  │              │
+      │ POST /elections/   │                   │               │                  │              │
+      │ draft {title,desc} │                   │               │                  │              │
+      │───────────────────►│ createDraft()     │               │                  │              │
+      │                    │──────────────────────────────────────────────────────────────────────►│ save doc (electionId: null)
+      │◄───201 draft, state:"draft" (derived — no on-chain mirror yet)───┤               │                  │              │
+      │                    │                   │               │                  │              │
+      │ sign createElection(title,startTime,   │               │                  │              │
+      │ endTime) — NOT via backend             │               │                  │              │
+      │────────────────────────────────────────►│ submit tx    │                  │              │
+      │                    │                   │──────────────►│ mine & emit      │              │
+      │                    │                   │                │ ElectionCreated  │              │
+      │◄──tx receipt (electionId, txHash)───────┤                │─────────────────►│ upsert       │
+      │                    │                   │               │                  │─────────────►│ IndexedElection
+      │ PATCH /elections/draft/{id}/link-onchain                │                  │              │
+      │ {electionId, transactionHash}           │               │                  │              │
+      │───────────────────►│ linkOnChainElection() verifies     │                  │              │
+      │                    │ electionId exists on-chain (ElectionContractClient.getElection)       │
+      │                    │──────────────────────────────────────────────────────►│              │
+      │◄───200 linked──────│                   │               │                  │              │
+```
+
+Candidates are added the same way afterwards — the admin's wallet signs
+`addCandidate(electionId, name, metadataURI)` directly per candidate (no
+backend involvement), and the worker mirrors each `CandidateAdded` event
+into the same `IndexedElection` document. The draft/link-onchain step
+exists specifically because the write-path architecture keeps the backend
+out of the actual `createElection()` transaction, so it has no other way
+to learn the resulting on-chain `electionId` (see `election.service.ts`'s
+header comment).
+
+**Sequence diagram — Register Voter (the off-chain application queue this
+section's existing "admin approves registration" diagram assumes as its
+starting point):**
+
+```
+Voter (Frontend)   Backend API        MongoDB          Admin (Frontend)
+      │                 │                │                    │
+      │ POST /voters/   │                │                    │
+      │ register-request│                │                    │
+      │ {electionId}    │                │                    │
+      │────────────────►│ submitRegistrationRequest()          │
+      │                 │───────────────►│ insert, status:    │
+      │                 │                │ pending             │
+      │◄───201 request──│                │                    │
+      │                 │                │                    │
+      │                 │                │  GET /admin/registration-requests
+      │                 │                │  ?status=pending    │
+      │                 │                │◄────────────────────│
+      │                 │                │  merged with mirrored on-chain
+      │                 │                │  confirmation (IndexedVoterRegistration)
+      │                 │                │────────────────────►│
+      │                 │                │                    │
+      │                 │                │  POST /admin/registration-requests/
+      │                 │                │  {id}/approve       │
+      │                 │                │◄────────────────────│
+      │                 │◄───────────────│ reviewRegistrationRequest():
+      │                 │                │ status → approved, reviewedBy,
+      │                 │                │ reviewedAt (decision recorded
+      │                 │                │ off-chain only)     │
+      │                 │                │────────────────────►│ 200 approved
+      │ GET /voters/me/ │                │                    │
+      │ registration/   │                │                    │
+      │ {electionId}    │                │                    │
+      │────────────────►│                │                    │
+      │◄──"approved"────│                │                    │
+```
+
+This records the *decision* only — the admin's own wallet still separately
+signs the actual `registerVoter()` transaction (see this section's
+"admin approves registration" diagram above), which is what eventually
+flips `onChainConfirmed: true` once the worker indexes it. There is no
+on-chain concept of a "request"; `RegistrationRequestModel` exists purely
+to give admins a reviewable queue before they spend gas confirming
+someone on-chain.
+
+**Sequence diagram — Event Processing (the generic ingestion pipeline
+every event above actually goes through — not a separate flow so much as
+what "Background Worker: upsert" means in every diagram in this section):**
+
+```
+Worker Process        Blockchain (RPC)         MongoDB                    BullMQ / Redis        Other Workers
+      │                      │                     │                          │                     │
+      │ setInterval fires pollOnce() every          │                          │                     │
+      │ RECOMMENDED_POLL_INTERVAL_MS (+ once on boot)│                          │                     │
+      │                      │                     │                          │                     │
+      │ syncAllEvents(): for each of the 10 tracked event definitions:         │                     │
+      │ getCheckpoint(key)   │                     │                          │                     │
+      │─────────────────────────────────────────►│ read lastProcessedBlock │                     │
+      │◄───────────────────────────────────────────│                          │                     │
+      │ getNewLogs(fromBlock=checkpoint, to=latest) │                          │                     │
+      │─────────────────────►│                     │                          │                     │
+      │◄────────logs──────────│                     │                          │                     │
+      │ idempotent upsert keyed {txHash, logIndex}  │                          │                     │
+      │ into IndexedChainEvent + the relevant       │                          │                     │
+      │ domain mirror (IndexedElection /            │                          │                     │
+      │ IndexedVoterRegistration / IndexedVoteEvent)│                          │                     │
+      │─────────────────────────────────────────►│                          │                     │
+      │ for events that need one, enqueue a job     │                          │                     │
+      │ (rollup recompute, notification, webhook)   │                          │                     │
+      │─────────────────────────────────────────────────────────────────────►│ job queued          │
+      │ saveCheckpoint(key) — ONLY after every log   │                          │                     │
+      │ in this batch persisted successfully        │                          │                     │
+      │─────────────────────────────────────────►│                          │                     │
+      │ checkForWorkerStall() — runs regardless of   │                          │                     │
+      │ this cycle's success/failure                │                          │                     │
+      │                      │                     │                          │ (independently,     │
+      │                      │                     │                          │  whenever free)     │
+      │                      │                     │                          │────────────────────►│ pulls job,
+      │                      │                     │                          │                     │ processes it
+```
+
+If persisting a batch throws partway through, that event's checkpoint
+simply isn't advanced — the next poll cycle retries the same block range
+(safe, since `getNewLogs`'s contract is at-least-once delivery and every
+write above is an idempotent upsert, never a plain insert). One event
+definition failing doesn't block the other nine from progressing in the
+same cycle. The three BullMQ workers (analytics rollup, notification
+dispatch, webhook dispatch) never touch the chain or read logs themselves
+— they only ever react to jobs this pipeline enqueues.
+
+**Sequence diagram — Finalize Election:**
+
+```
+Admin (Frontend)   Blockchain      Background Worker   MongoDB        BullMQ workers   Other Frontends
+      │                 │                 │                │                │                │
+      │ sign             │                 │                │                │                │
+      │ finalizeElection │                 │                │                │                │
+      │ (electionId)     │                 │                │                │                │
+      │ — admin wallet,  │                 │                │                │                │
+      │ never inferred   │                 │                │                │                │
+      │ from endTime     │                 │                │                │                │
+      │ (ADR-006)        │                 │                │                │                │
+      │────────────────►│ mine & emit     │                │                │                │
+      │                 │ ElectionFinalized│                │                │                │
+      │                 │ (electionId,    │                │                │                │
+      │                 │  finalizedBy)   │                │                │                │
+      │                 │────────────────►│ upsert          │                │                │
+      │                 │                 │ IndexedChainEvent               │                │
+      │                 │                 │ + IndexedElection.finalized=true │                │
+      │                 │                 │───────────────►│                │                │
+      │                 │                 │ enqueue: notifications,          │                │
+      │                 │                 │ webhooks, rollup recompute       │                │
+      │                 │                 │────────────────────────────────►│ deliver / compute
+      │                 │                 │                │                │ independently, │
+      │                 │                 │                │                │ retried on failure
+      │ any client: GET /elections/{id}   │                │                │                │
+      │ now derives status "result_finalized" (Section 16) straight from Mongo, no chain call │
+      │────────────────────────────────────────────────────────────────────────────────────►│
+```
 
 ---
 
@@ -1300,8 +1455,9 @@ applied retroactively to earlier sections:
   `/ready` (verifying MongoDB/Redis connectivity) and `/metrics` to be added
   in Phase 7 (Logging, Audit, and Configuration) alongside the rest of the
   observability work.
-- **Sequence diagrams for every major flow** — vote casting and registration
-  approval are documented in Section 3.1; Create Election, Register Voter,
-  Event Processing, and Finalize Election sequence diagrams will be added to
-  this document during Phase 5/6 implementation, once their exact message
-  shapes are finalized.
+- **Sequence diagrams for every major flow** — implemented. All six are in
+  Section 3.1: vote casting and registration approval (documented earliest,
+  before their exact message shapes were finalized), plus Create Election,
+  Register Voter, Event Processing, and Finalize Election (added once
+  Phase 5/6/7 implementation had settled their real routes/contract calls/
+  worker pipeline — see HANDOFF.md for the session this closed in).
