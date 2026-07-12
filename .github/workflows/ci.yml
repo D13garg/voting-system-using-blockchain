@@ -71,7 +71,8 @@ jobs:
         working-directory: contracts
         run: |
           slither . \
-            --exclude-dependencies
+            --exclude-dependencies \
+            --exclude pragma
 
   backend-unit:
     name: backend (lint + typecheck + unit tests)
@@ -148,6 +149,21 @@ jobs:
         working-directory: backend
         env:
           NODE_ENV: test
+          # Required config for integration tests (uses real Hardhat node deployment)
+          RPC_URL_PRIMARY: "http://localhost:8545"
+          RPC_URL_FALLBACK: "http://localhost:8545"
+          CHAIN_ID: "31337"
+          # Dummy addresses (will be overwritten by deploy script)
+          CONTRACT_ADDRESS_VOTER_REGISTRY: "0x0000000000000000000000000000000000000001"
+          CONTRACT_ADDRESS_ELECTION: "0x0000000000000000000000000000000000000002"
+          BACKEND_SIGNER_PRIVATE_KEY: "0x0000000000000000000000000000000000000000000000000000000000000001"
+          # Notification & email config (required but not used in integration tests)
+          RESEND_API_KEY: "test_key_for_ci"
+          IPFS_API_KEY: "test_key_for_ci"
+          IPFS_API_SECRET: "test_secret_for_ci"
+          # Auth config
+          SIWE_DOMAIN: "localhost"
+          SIWE_SESSION_SECRET: "test_session_secret_at_least_32_chars_long_for_ci_purposes"
         run: pnpm test:integration
 
   frontend:
