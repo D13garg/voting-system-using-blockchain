@@ -203,13 +203,15 @@ against each relevant section of `architecture.md`, specifically because
 this document has a demonstrated history of drift. **All seven were
 worked through one by one, each as its own short design doc with forked
 decisions approved before implementing, and all seven are now confirmed
-by the user's own real `pnpm test` runs** (final count: 179/179 tests
-across 18 files). Kept below, unedited, as the historical record of what
-was found and how each was resolved — a future session should NOT need
-to revisit any of these, only the new items in the section right after
-this one.
+by the user's own real `pnpm test` runs** (final count as of that point:
+179/179 tests across 18 files - **superseded**, see "Newly discovered
+pre-frontend items" below for the current 194/194-across-19-files count
+after items 1/2/4 there were built and confirmed). Kept below, unedited,
+as the historical record of what was found and how each was resolved —
+a future session should NOT need to revisit any of these, only the new
+items in the section right after this one.
 
-## Newly discovered pre-frontend items — found by this session's own audit, NOT yet built, awaiting the user's call
+## Newly discovered pre-frontend items — 1/2/4 DONE and confirmed, 3/5 still open
 
 After the 7 gaps above were confirmed closed, the user asked to check for
 anything else outstanding before Phase 4. This section is the result of
@@ -224,61 +226,94 @@ only, not implementation. Presented in the order a next session should
 probably tackle them, with reasoning for that ordering, but the user gets
 final say.
 
-1. **Real on-chain-role enforcement is still missing on every
-   admin-facing write endpoint.** This is the "Recurring, deliberate,
-   still-open TODO" already named in "Current project state" above — not
-   new, but re-verified still true right now:
-   `election.routes.ts`/`admin.routes.ts`/`candidate.routes.ts`/
-   `ipfs.routes.ts` all gate their write endpoints with `requireAuth`
-   only (any authenticated wallet), never a real
-   `ELECTION_ADMINISTRATOR_ROLE`/`SYSTEM_ADMINISTRATOR_ROLE` check
-   (confirmed via `grep -n "requireAuth\|requireRole\|hasRole"` across
-   all four route files — zero role-check hits anywhere). The original
-   note said this was blocked on gap #1 (Wallet module) and gap #3 (rate
-   limiting) both landing first — **both are now done**, so this is
-   newly actionable, not newly discovered. Likely the highest-priority
-   item here: it's a real authorization gap, not a nice-to-have, though
-   it's been "harmless today" only because on-chain-transaction endpoints
-   still revert at the contract level for a non-admin caller regardless —
-   whether that revert-safety-net argument actually covers every
-   affected endpoint (vs. some being pure off-chain DB writes with no
-   on-chain step to fall back on, e.g. Candidate profile edits, Election
-   draft/link) has not been re-verified this session and should be the
-   first thing checked before deciding how urgent this really is.
-2. **The Wallet module (gap #1) still isn't called from anywhere.**
-   `toDisplayName`/`resolveEnsName`/etc. exist and are tested in
-   isolation, but `grep -rl "toDisplayName\|resolveEnsName" backend/src/modules/admin
-   backend/src/modules/notifications` returns nothing — confirmed still
-   true this session. Gap #1's own entry already flagged this as "a
-   natural follow-on, not scope creep into that gap." Lower priority than
-   item 1 above (a missing display nicety, not a security gap), but
-   genuinely dead code until something calls it.
-3. **No CI pipeline exists at all.** `architecture.md` Section 24's own
-   production-readiness list names "CI pipeline gating (GitHub Actions:
-   contract tests, Slither, backend tests, frontend build/lint, branch
-   protection)" explicitly. `find .github -type f` returns nothing —
-   there is no `.github/` directory anywhere in this repo. Unlike Slither
-   and Sepolia deployment (both explicitly, deliberately deferred per the
-   Contracts section above, the user's own call), CI was never flagged as
-   deferred anywhere in this document or `decisions-log.md` — it's a
-   genuine gap against the project's own stated checklist, not a
-   documented deferral. Worth a real decision (build it now vs.
-   explicitly defer it, the user's call either way) rather than it
-   silently continuing to not exist.
-4. **`/ready` and `/metrics` health-check endpoints don't exist.** Only
-   `/health` is wired in `app.ts` (confirmed via
-   `grep -n "'/health'\|'/ready'\|'/metrics'" backend/src/app.ts` — one
-   hit, `/health`, nothing else). `architecture.md`'s own "Additional
-   refinement" section is explicit that `/ready` (verifying
-   MongoDB/Redis connectivity) and `/metrics` were slated for "Phase 7
-   (Logging, Audit, and Configuration) alongside the rest of the
-   observability work" — Phase 7's other work (rate limiting, structured
-   logging, audit logging, the stalled-worker alert) is all done now, but
-   these two endpoints appear to have been missed along the way. Smaller
-   than items 1-3, genuinely useful for anything that will eventually
-   deploy this (load balancer health checks, monitoring), not blocking
-   for frontend work itself.
-5. **Four of six architecture sequence diagrams were never added.**
+1. **DONE, CONFIRMED by the user's real `pnpm test` run.** Added
+   `hasRole()` to both `IElectionContractClient`/
+   `IVoterRegistryContractClient` (thin `readContract` wrappers), a
+   `blockchain/roles.ts` with the `ELECTION_ADMINISTRATOR_ROLE`/
+   `SYSTEM_ADMINISTRATOR_ROLE` hash constants, and a new `requireRole(role)`
+   middleware (`auth.roles.middleware.ts`) checking **both** contracts and
+   requiring the role on **at least one** (approved fork - tolerates the
+   two contracts' role state drifting apart, since they're independently
+   managed AccessControl instances per `deploy.ts`). Deliberately
+   **not cached** (approved fork) - `requireAuth`'s own header comment
+   already states the governing principle for on-chain facts like this
+   one. Wired into all four flagged write endpoints:
+   `POST /elections/draft`, `PATCH /elections/draft/:id/link-onchain`,
+   `POST /admin/registration-requests/:id/approve|reject`,
+   `PUT /elections/:id/candidates/:candidateId/profile`,
+   `POST /ipfs/upload`. Investigating this closer than the original audit
+   pass did turned up two things worth flagging: (a) all four endpoint
+   groups are pure off-chain Mongo/IPFS writes with **zero** on-chain
+   revert fallback - worse than this document's earlier "harmless
+   because the tx still reverts" framing assumed; (b)
+   `linkOnChainElement` in particular had no ownership check tying a
+   draft to the admin who created it, so a non-admin could previously
+   hijack *any* draft onto an arbitrary confirmed `electionId`. Tests:
+   a new `test/auth/auth.roles.middleware.test.ts` (7 tests) plus
+   403/OR-semantics cases added to `election.test.ts`, `candidate.test.ts`,
+   `admin.test.ts` (which needed its first-ever fake contract clients,
+   since the module previously made no live chain calls at all), and
+   `ipfs.test.ts`.
+   **One real bug found and fixed only once the user ran the real suite**
+   (this sandbox's `fastdl.mongodb.org` restriction meant these suites
+   could only be typechecked/linted here, never executed): the new
+   `election.test.ts` OR-semantics test got a genuine 400 instead of 201.
+   Root cause: `ElectionMetadataModel`'s `description` field was
+   `required: true` (with a `default: ""`) - real MongoDB's validator was
+   never actually exercised by any prior test with an all-fields-present
+   body, but the new test's `description: ""` tripped it, since Mongoose's
+   `required` was doing real work here despite the default. Fixed by the
+   user: `required: false` on that field. Unrelated to on-chain-role logic
+   itself - a pre-existing latent bug the new test coverage happened to
+   surface, not something the role-enforcement work introduced.
+2. **DONE, CONFIRMED by the user's real `pnpm test` run.** Admin's
+   `RegistrationRequestSummary` gained a `voterDisplayName` field
+   (`toDisplayName(voterAddress)`, resolved in `toSummary()`) for the
+   registration-review queue - and, found missing during the same real
+   test run, `POST /voters/register-request`'s hand-rolled response
+   object (it builds its own plain object rather than going through
+   `toSummary()`, so it didn't automatically pick up the new field) also
+   now includes `voterDisplayName`, fixed by the user in
+   `admin.routes.ts` for consistency between the two response shapes.
+   Notifications' `ElectionFinalized` email/webhook now carry the
+   finalizer's display name - `eventSync.ts` passes the event's own
+   `finalizedBy` address through
+   `enqueueElectionFinalizedNotifications`/`enqueueElectionFinalizedWebhooks`
+   (both gained an optional third parameter), resolved once per call via
+   `toDisplayName`, not once per recipient. Both integration points
+   degrade to the checksummed address with zero behavior change when no
+   `RPC_URL_MAINNET_ENS` is configured. New/updated tests in
+   `admin.test.ts`, `notification.test.ts`, `webhook.test.ts`.
+3. **STILL OPEN - not started.** No CI pipeline exists at all.
+   `architecture.md` Section 24's own production-readiness list names
+   "CI pipeline gating (GitHub Actions: contract tests, Slither, backend
+   tests, frontend build/lint, branch protection)" explicitly. `find
+   .github -type f` returns nothing — there is no `.github/` directory
+   anywhere in this repo. Unlike Slither and Sepolia deployment (both
+   explicitly, deliberately deferred per the Contracts section above, the
+   user's own call), CI was never flagged as deferred anywhere in this
+   document or `decisions-log.md` — it's a genuine gap against the
+   project's own stated checklist, not a documented deferral. Worth a
+   real decision (build it now vs. explicitly defer it, the user's call
+   either way) rather than it silently continuing to not exist. **Needs
+   its own short design doc before being built** - GitHub Actions workflow
+   structure, which jobs run on which triggers, whether Slither/Sepolia-
+   deploy stay excluded per their own already-documented deferral - same
+   discipline every other gap in this document got, don't skip it just
+   because items 1/2/4 didn't strictly need one.
+4. **DONE, CONFIRMED by the user's real `pnpm test` run.** `/health`
+   stays pure liveness (unchanged). `/ready` checks
+   `mongoose.connection.readyState` and `getRedisConnection().status`
+   (both already-maintained connection state, not a live round-trip on
+   every request) and returns 503 with a `checks` breakdown when either
+   is down. `/metrics` is hand-rolled Prometheus text-exposition format
+   (uptime, RSS, heap used/total, an `up` gauge) straight off `process` -
+   deliberately **no new dependency** (no `prom-client`) for a handful of
+   numbers at this project's scale; worth revisiting with a real metrics
+   library if/when this app needs histograms or custom business metrics.
+   New `test/config/health.test.ts` (3 tests) covers all three endpoints,
+   including `/ready`'s 503 path.
+5. **STILL OPEN - not started.** Four of six architecture sequence
    `architecture.md`'s own "Additional refinement" section says vote
    casting and registration-approval diagrams shipped early, and "Create
    Election, Register Voter, Event Processing, and Finalize Election
@@ -289,16 +324,35 @@ final say.
    Documentation-only, zero runtime impact, lowest priority of the five —
    but a real gap against what this document promised itself it would
    contain, now that every message shape it was waiting on has long since
-   been finalized.
+   been finalized. **Still open** — deferred to next session at the
+   user's explicit call (2026-07-12 session), alongside item 3.
 
-**None of these block starting Phase 4 on purely technical grounds** —
-same framing the 7 gaps above used. Item 1 is the one with a real
-argument for going first anyway (it's a security posture question, not
-just architecture-doc conformance), but that's a recommendation, not a
-decision already made. Next session should present these to the user the
-same way the 7 gaps were presented — a short design doc + forked
-decisions per item the user chooses to act on, and explicit sign-off
-before any of it gets built.
+**Items 1, 2, and 4 are DONE and CONFIRMED as of this session (2026-07-12)**
+— the user explicitly chose "address all 5 now" over deferring to Phase 4,
+3 of the 5 got built, and the user then ran the real `pnpm test` suite
+themselves (this sandbox's `fastdl.mongodb.org` restriction meant the
+Mongo-backed suites could only be typechecked/linted in-session, never
+executed here). That real run caught two genuine bugs the in-sandbox
+verification couldn't have: `ElectionMetadataModel.description`'s
+`required: true` rejecting an empty-string body the new role-enforcement
+test exercised (fixed: `required: false`), and `POST
+/voters/register-request`'s hand-rolled response object missing the new
+`voterDisplayName` field that `toSummary()`-based responses picked up
+automatically (fixed: added it there too, in `admin.routes.ts`). Both
+fixes applied by the user directly, then synced back into this repo.
+**Final confirmed count: 19/19 test files, 194/194 tests passing** — a
+genuinely trustworthy number, not an in-sandbox approximation. `tsc
+--noEmit` and `eslint .` both clean throughout.
+
+**Still open: item 3 (CI pipeline) and item 5 (4 sequence diagrams) —
+neither started.** Neither blocks Phase 4 on technical grounds, same
+framing as before. Item 3 in particular deserves its own short design doc
+before being built (GitHub Actions workflow structure, which jobs run on
+which triggers, whether Slither/Sepolia-deploy stay excluded per their
+own already-documented deferral) — don't skip that step just because
+items 1/2/4 didn't need one.
+
+
 
 1. **Wallet module doesn't exist.** ~~Section 7.1 lists `Wallet`~~
    **STATUS: DONE, pending the user's own `pnpm test` confirmation (see
@@ -702,14 +756,27 @@ before any of it gets built.
 2. **Confirm no other AI agent is concurrently editing this working
    tree** before making any changes — see the "Non-obvious lessons" entry
    above for why this matters concretely, not just in the abstract.
-3. **All seven backend architecture gaps are now fully DONE and
-   confirmed** by the user's real `pnpm test` runs — 179/179 across 18
-   files is the current authoritative count. Nothing left to build on
-   the backend before Phase 4.
-4. **Phase 4 (Frontend)** starts now, per the user's explicit call — not
-   because the gaps technically blocked frontend work, but to make sure
-   the frontend is built against a backend that fully matches its own
-   architecture doc first. That condition is now satisfied.
+3. **All seven backend architecture gaps, PLUS items 1/2/4 of the "newly
+   discovered pre-frontend items" below, are DONE and CONFIRMED** by the
+   user's real `pnpm test` run this session (2026-07-12): **19/19 test
+   files, 194/194 tests passing.** That run caught two real bugs (see
+   items 1/2's entries below for exactly what and why) that this
+   session's in-sandbox-only verification couldn't have - trust this
+   194/194 number, not any in-sandbox approximation quoted earlier in
+   this document's history.
+4. **Items 3 (CI pipeline) and 5 (4 sequence diagrams) are still fully
+   open - neither started, not even a design doc yet.** Don't infer
+   otherwise from items 1/2/4 being done; these two are genuinely
+   untouched. Next session: pick up item 3 with its own short design doc
+   first (don't skip that step - see item 3's entry above for why), then
+   item 5.
+5. **Phase 4 (Frontend) has not started** — still genuinely true, no
+   change to `App.tsx` or the Phase-1 placeholder state this session. The
+   user's original plan was to close every pre-frontend item first; items
+   3 and 5 remaining open means that condition isn't fully satisfied yet,
+   though neither is a technical blocker (same framing used throughout
+   this document) if the user chooses to start Phase 4 before finishing
+   them.
 
 ## Files worth knowing about at repo root
 - `PHASE2_STATUS.md`, `PHASE3_MANIFEST.md` — prior session status notes,
