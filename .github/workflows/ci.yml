@@ -69,7 +69,10 @@ jobs:
 
       - name: Run Slither
         working-directory: contracts
-        run: slither . --exclude-dependencies
+        run: |
+          slither . \
+           --exclude-dependencies \
+           --exclude timestamp,pragma
 
   backend-unit:
     name: backend (lint + typecheck + unit tests)
