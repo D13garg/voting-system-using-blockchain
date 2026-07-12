@@ -30,17 +30,17 @@
 // retry); past that window, it's treated as the genuine mismatch case
 // (404 ELECTION_STATE_MISMATCH, as before).
 //
-// AUTHORIZATION (approved design fork): draft creation/linking below
-// only checks "is there a valid session" (via requireAuth in
-// election.routes.ts), not "does this wallet actually hold
-// ELECTION_ADMINISTRATOR_ROLE on-chain". Real enforcement still happens
-// at the point the admin's wallet submits the actual createElection()
-// transaction directly to the chain (which reverts for a non-admin,
-// per Election.sol's onlyRole modifier) - a non-admin creating bogus
-// Mongo drafts is a harmless nuisance, not a security hole, since drafts
-// carry no on-chain effect until deliberately linked. TODO: once the
-// Admin module exists (with its on-chain role mirror per Section 11),
-// gate this with a real role check instead.
+// AUTHORIZATION: draft creation/linking below is gated by requireAuth
+// AND requireRole(ELECTION_ADMINISTRATOR_ROLE) at the route layer
+// (election.routes.ts) - HANDOFF.md's "Newly discovered pre-frontend
+// items", item 1. Previously requireAuth-only, on the reasoning that
+// bogus Mongo drafts are harmless since real enforcement happens at the
+// createElection() transaction - but that missed linkOnChainElement's
+// own write, which has no on-chain step to fall back on at all: it just
+// records a (draftId, electionId, transactionHash) mapping directly into
+// Mongo, so a non-admin caller could hijack ANY draft (including one
+// created by a real admin) onto an arbitrary already-confirmed
+// electionId with no contract-level check ever standing in the way.
 
 import { HttpError } from "../../shared/httpError.js";
 import { BlockchainError, RECOMMENDED_POLL_INTERVAL_MS } from "../blockchain/index.js";

@@ -13,7 +13,13 @@ import request from "supertest";
 import type { Express } from "express";
 import { SiweMessage } from "siwe";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import type { CandidateData, ElectionData, IElectionContractClient, TransactionResult } from "../../src/modules/blockchain/index.js";
+import type {
+  CandidateData,
+  ElectionData,
+  IElectionContractClient,
+  IVoterRegistryContractClient,
+  TransactionResult,
+} from "../../src/modules/blockchain/index.js";
 
 const REQUIRED_ENV = {
   NODE_ENV: "test",
@@ -90,11 +96,40 @@ class FakeElectionContractClient implements IElectionContractClient {
   finalizeElection(): Promise<TransactionResult> {
     throw new Error("not used by these tests");
   }
+
+  /** Mutable per-test - see requireRole's "check both contracts, OR" design. Defaults to true (admin). */
+  hasRoleResult = true;
+
+  async hasRole(): Promise<boolean> {
+    return this.hasRoleResult;
+  }
+}
+
+/** Minimal fake IVoterRegistryContractClient, same reasoning as election.test.ts's own copy - requireRole checks both contracts. */
+class FakeVoterRegistryContractClient implements IVoterRegistryContractClient {
+  hasRoleResult = false;
+
+  isRegisteredForElection(): Promise<boolean> {
+    throw new Error("not used by these tests");
+  }
+
+  registerVoter(): Promise<TransactionResult> {
+    throw new Error("not used by these tests");
+  }
+
+  removeVoter(): Promise<TransactionResult> {
+    throw new Error("not used by these tests");
+  }
+
+  async hasRole(): Promise<boolean> {
+    return this.hasRoleResult;
+  }
 }
 
 let mongod: MongoMemoryServer;
 let app: Express;
 let fakeClient: FakeElectionContractClient;
+let fakeVoterRegistryClient: FakeVoterRegistryContractClient;
 let CandidateProfileModel: typeof import("../../src/modules/candidate/candidate.model.js").CandidateProfileModel;
 let IndexedElectionModel: typeof import("../../src/modules/indexing/indexedElection.model.js").IndexedElectionModel;
 let IndexedCandidateModel: typeof import("../../src/modules/indexing/indexedCandidate.model.js").IndexedCandidateModel;
@@ -121,6 +156,9 @@ beforeAll(async () => {
   fakeClient = new FakeElectionContractClient();
   blockchain._setElectionContractClientForTests(fakeClient);
 
+  fakeVoterRegistryClient = new FakeVoterRegistryContractClient();
+  blockchain._setVoterRegistryContractClientForTests(fakeVoterRegistryClient);
+
   await dbConnection.connectDatabase();
   app = appModule.buildApp();
 }, 300_000);
@@ -133,6 +171,8 @@ afterAll(async () => {
 beforeEach(() => {
   fakeClient.elections.clear();
   fakeClient.candidates.clear();
+  fakeClient.hasRoleResult = true;
+  fakeVoterRegistryClient.hasRoleResult = false;
 });
 
 afterEach(async () => {
@@ -350,6 +390,24 @@ describe("Candidate module - PUT /elections/:id/candidates/:candidateId/profile"
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("CANDIDATE_PROFILE_LOCKED");
 
+    const stored = await CandidateProfileModel.findOne({ electionId: 0, candidateId: 0 });
+    expect(stored).toBeNull();
+  });
+
+  it("returns 403 FORBIDDEN_ROLE when the wallet holds ELECTION_ADMINISTRATOR_ROLE on neither contract", async () => {
+    fakeClient.elections.set(0n, futureElection({ candidateCount: 1n }));
+    fakeClient.setCandidate(0n, 0n, { name: "Alice", metadataURI: "ipfs://alice", voteCount: 0n });
+    fakeClient.hasRoleResult = false;
+    fakeVoterRegistryClient.hasRoleResult = false;
+    const { cookie } = await getAuthenticatedCookie();
+
+    const res = await request(app)
+      .put("/elections/0/candidates/0/profile")
+      .set("Cookie", cookie)
+      .send({ bio: "Should be blocked." });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN_ROLE");
     const stored = await CandidateProfileModel.findOne({ electionId: 0, candidateId: 0 });
     expect(stored).toBeNull();
   });

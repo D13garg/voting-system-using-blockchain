@@ -177,4 +177,26 @@ describe("Notifications module - enqueueElectionFinalizedNotifications", () => {
     await enqueueElectionFinalizedNotifications(3, "Unsubscribed Election");
     expect(fakeQueue.calls).toHaveLength(0);
   });
+
+  it("includes the finalizer's display name in the email body when finalizedBy is provided (item 2 - Wallet module wiring)", async () => {
+    const finalizer = "0x1111111111111111111111111111111111111111";
+    await NotificationPreferenceModel.create([{ electionId: 4, walletAddress: "0xccc", email: "c@example.com" }]);
+
+    await enqueueElectionFinalizedNotifications(4, "Finalized By Test", finalizer);
+
+    expect(fakeQueue.calls).toHaveLength(1);
+    // No RPC_URL_MAINNET_ENS in REQUIRED_ENV, so this degrades to the
+    // checksummed address rather than an ENS name - see
+    // wallet.service.ts's toDisplayName header comment.
+    expect(fakeQueue.calls[0]?.data.html).toContain(finalizer);
+  });
+
+  it("omits the finalized-by line entirely when finalizedBy is not provided", async () => {
+    await NotificationPreferenceModel.create([{ electionId: 5, walletAddress: "0xddd", email: "d@example.com" }]);
+
+    await enqueueElectionFinalizedNotifications(5, "No Finalizer Test");
+
+    expect(fakeQueue.calls).toHaveLength(1);
+    expect(fakeQueue.calls[0]?.data.html).not.toContain("Finalized by");
+  });
 });

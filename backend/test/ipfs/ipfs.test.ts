@@ -5,7 +5,12 @@
 // route depends on via requireAuth), real SIWE-authenticated sessions,
 // real HTTP requests via supertest, and a fake IIpfsClient test double
 // instead of a real call to Pinata - see PinataIpfsClient.ts's header
-// comment for why a real call can't be verified in this sandbox.
+// comment for why a real call can't be verified in this sandbox. A
+// minimal role-check-only fake IElectionContractClient/
+// IVoterRegistryContractClient pair is also needed as of the
+// on-chain-role-enforcement gap (HANDOFF.md's "Newly discovered
+// pre-frontend items", item 1) - POST /ipfs/upload now calls
+// requireRole, same reasoning as admin.test.ts's own header comment.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MongoMemoryServer } from "mongodb-memory-server";
@@ -15,6 +20,13 @@ import type { Express } from "express";
 import { SiweMessage } from "siwe";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { IIpfsClient, IpfsPinInput, IpfsPinResult } from "../../src/modules/ipfs/index.js";
+import type {
+  IElectionContractClient,
+  IVoterRegistryContractClient,
+  ElectionData,
+  CandidateData,
+  TransactionResult,
+} from "../../src/modules/blockchain/index.js";
 
 const REQUIRED_ENV = {
   NODE_ENV: "test",
@@ -47,9 +59,56 @@ class FakeIpfsClient implements IIpfsClient {
   }
 }
 
+/** Role-check-only fake - see this file's header comment. Defaults to true (admin). */
+class FakeElectionContractClient implements IElectionContractClient {
+  hasRoleResult = true;
+
+  getElection(): Promise<ElectionData> {
+    throw new Error("not used by these tests");
+  }
+  getCandidate(): Promise<CandidateData> {
+    throw new Error("not used by these tests");
+  }
+  hasVoted(): Promise<boolean> {
+    throw new Error("not used by these tests");
+  }
+  electionCount(): Promise<bigint> {
+    throw new Error("not used by these tests");
+  }
+  isPaused(): Promise<boolean> {
+    throw new Error("not used by these tests");
+  }
+  finalizeElection(): Promise<TransactionResult> {
+    throw new Error("not used by these tests");
+  }
+  async hasRole(): Promise<boolean> {
+    return this.hasRoleResult;
+  }
+}
+
+/** Role-check-only fake - see this file's header comment. Defaults to false, matching the other modules' convention. */
+class FakeVoterRegistryContractClient implements IVoterRegistryContractClient {
+  hasRoleResult = false;
+
+  isRegisteredForElection(): Promise<boolean> {
+    throw new Error("not used by these tests");
+  }
+  registerVoter(): Promise<TransactionResult> {
+    throw new Error("not used by these tests");
+  }
+  removeVoter(): Promise<TransactionResult> {
+    throw new Error("not used by these tests");
+  }
+  async hasRole(): Promise<boolean> {
+    return this.hasRoleResult;
+  }
+}
+
 let mongod: MongoMemoryServer;
 let app: Express;
 let fakeClient: FakeIpfsClient;
+let fakeElectionClient: FakeElectionContractClient;
+let fakeVoterRegistryClient: FakeVoterRegistryContractClient;
 let SESSION_COOKIE_NAME: string;
 let IpfsError: typeof import("../../src/modules/ipfs/index.js").IpfsError;
 
@@ -58,6 +117,7 @@ beforeAll(async () => {
 
   Object.assign(process.env, REQUIRED_ENV, { MONGODB_URI: mongod.getUri() });
 
+  const blockchain = await import("../../src/modules/blockchain/index.js");
   const ipfsModule = await import("../../src/modules/ipfs/index.js");
   const authRoutes = await import("../../src/modules/auth/auth.routes.js");
   const appModule = await import("../../src/app.js");
@@ -68,6 +128,12 @@ beforeAll(async () => {
 
   fakeClient = new FakeIpfsClient();
   ipfsModule._setIpfsClientForTests(fakeClient);
+
+  fakeElectionClient = new FakeElectionContractClient();
+  blockchain._setElectionContractClientForTests(fakeElectionClient);
+
+  fakeVoterRegistryClient = new FakeVoterRegistryContractClient();
+  blockchain._setVoterRegistryContractClientForTests(fakeVoterRegistryClient);
 
   await dbConnection.connectDatabase();
   app = appModule.buildApp();
@@ -82,6 +148,8 @@ beforeEach(() => {
   fakeClient.nextCid = undefined;
   fakeClient.shouldThrow = undefined;
   fakeClient.calls = [];
+  fakeElectionClient.hasRoleResult = true;
+  fakeVoterRegistryClient.hasRoleResult = false;
 });
 
 /** Full real SIWE flow -> a valid session cookie, same helper as the other modules' tests. */
@@ -169,5 +237,18 @@ describe("IPFS module - POST /ipfs/upload", () => {
       .attach("image", Buffer.from("fake-png-bytes"), { filename: "photo.png", contentType: "image/png" });
     expect(res.status).toBe(502);
     expect(res.body.error.code).toBe("IPFS_UPLOAD_FAILED");
+  });
+
+  it("returns 403 FORBIDDEN_ROLE when the wallet holds ELECTION_ADMINISTRATOR_ROLE on neither contract", async () => {
+    fakeElectionClient.hasRoleResult = false;
+    fakeVoterRegistryClient.hasRoleResult = false;
+    const cookie = await getAuthenticatedCookie();
+    const res = await request(app)
+      .post("/ipfs/upload")
+      .set("Cookie", cookie)
+      .attach("image", Buffer.from("fake-png-bytes"), { filename: "photo.png", contentType: "image/png" });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN_ROLE");
+    expect(fakeClient.calls).toHaveLength(0);
   });
 });

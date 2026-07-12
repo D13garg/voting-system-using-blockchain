@@ -12,20 +12,23 @@
 // (see candidate.service.ts's header comment). This module never touches
 // the chain itself.
 //
-// AUTHORIZATION (same recurring approved fork as every other write
-// endpoint in this codebase): gated by requireAuth only, not a real
-// ELECTION_ADMINISTRATOR_ROLE check. Harmless for the same reason as
-// always - uploading an image to IPFS has no on-chain effect by itself;
-// a non-admin who calls this can only ever produce an orphaned pin, not
-// register anything as a real candidate (that still requires the
-// separate, contract-enforced addCandidate transaction). Same TODO as
-// every other module: tighten once a real on-chain-role mirror exists.
+// AUTHORIZATION: gated by requireAuth AND requireRole(ELECTION_ADMINISTRATOR_ROLE)
+// (HANDOFF.md's "Newly discovered pre-frontend items", item 1 - real
+// on-chain-role enforcement, not just requireAuth). Uploading an image to
+// IPFS still has no on-chain effect by itself - a rejected caller here
+// would only ever have produced an orphaned pin, never registered a real
+// candidate - but there was no on-chain revert safety net for this
+// endpoint at all (it never touches the chain), so requireAuth alone
+// really did mean "any logged-in wallet can spend the backend's IPFS
+// quota," not just a defense-in-depth gap.
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import multer, { MulterError } from "multer";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { HttpError } from "../../shared/httpError.js";
 import { requireAuth } from "../auth/auth.middleware.js";
+import { requireRole } from "../auth/auth.roles.middleware.js";
+import { ELECTION_ADMINISTRATOR_ROLE } from "../blockchain/index.js";
 import { getIpfsClient, uploadCandidateImage } from "./index.js";
 import { MAX_IMAGE_SIZE_BYTES } from "./ipfs.types.js";
 
@@ -82,6 +85,7 @@ function singleImageUpload(req: Request, res: Response, next: NextFunction): voi
 ipfsRouter.post(
   "/upload",
   asyncHandler(requireAuth),
+  asyncHandler(requireRole(ELECTION_ADMINISTRATOR_ROLE)),
   singleImageUpload,
   asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {

@@ -33,10 +33,13 @@
 //   better trade than a spurious 404 blocking an admin's immediate next
 //   action.
 //
-// AUTHORIZATION (approved design fork, same choice made every previous
-// time): the profile-edit endpoint is gated by requireAuth only, not a
-// real ELECTION_ADMINISTRATOR_ROLE check. TODO: tighten once a real
-// on-chain-role mirror exists.
+// AUTHORIZATION: the profile-edit endpoint is gated by requireAuth AND
+// requireRole(ELECTION_ADMINISTRATOR_ROLE) at the route layer
+// (candidate.routes.ts) - HANDOFF.md's "Newly discovered pre-frontend
+// items", item 1. Previously requireAuth-only; this write has no
+// on-chain step at all to fall back on (bios live only in Mongo), so any
+// authenticated wallet could previously overwrite any candidate's public
+// bio in any election.
 //
 // FAIRNESS RULE (approved design fork): bio edits are blocked once
 // voting has started for that election, mirroring

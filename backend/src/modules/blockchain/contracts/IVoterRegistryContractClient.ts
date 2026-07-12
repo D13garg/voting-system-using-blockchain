@@ -21,4 +21,12 @@ export interface IVoterRegistryContractClient {
 
   /** Submits a removeVoter() transaction. Same rare-backend-initiated-write caveat as registerVoter above. */
   removeVoter(electionId: bigint, voter: `0x${string}`): Promise<TransactionResult>;
+
+  /**
+   * Whether `account` currently holds `role` on THIS contract's own
+   * AccessControl state. See IElectionContractClient.hasRole's doc
+   * comment for the per-contract role-storage caveat - identical
+   * reasoning applies here.
+   */
+  hasRole(role: `0x${string}`, account: `0x${string}`): Promise<boolean>;
 }

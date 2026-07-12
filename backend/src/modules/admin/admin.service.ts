@@ -24,18 +24,27 @@
 // fetchOnChainConfirmed below for why this migration also needed no
 // eventual-consistency error-code split the way Election's did.
 //
-// AUTHORIZATION (approved design fork, same choice as Election/Voting):
-// admin-only endpoints below are gated by requireAuth only (any
-// logged-in wallet), not a real ELECTION_ADMINISTRATOR_ROLE check -
-// harmless for the same reason as Election's admin endpoints: a
-// non-admin reviewing requests in Mongo has no on-chain effect, since
-// the actual registerVoter() transaction still reverts for a non-admin
-// wallet regardless of what this backend's Mongo documents say. TODO:
-// tighten once a real on-chain-role mirror exists.
+// AUTHORIZATION: the review endpoints (reviewRegistrationRequest, wired
+// to POST .../approve and .../reject) are gated by requireAuth AND
+// requireRole(ELECTION_ADMINISTRATOR_ROLE) at the route layer
+// (admin.routes.ts) - HANDOFF.md's "Newly discovered pre-frontend
+// items", item 1. Previously requireAuth-only, on the reasoning that a
+// non-admin's Mongo-only decision was harmless since the real
+// registerVoter() transaction still reverts for a non-admin wallet - but
+// that reasoning didn't hold up: an approved-in-Mongo request the real
+// admin later trusts at a glance (without independently re-checking
+// on-chain eligibility) is a real, if narrow, spoofing surface, and this
+// module's read strategy above means there's no on-chain step at all
+// standing between a bad decision here and it being treated as
+// authoritative. submitRegistrationRequest and getMyRegistrationStatus
+// remain requireAuth-only, deliberately - any wallet may request its own
+// registration or check its own status; only the review decision itself
+// needed real role gating.
 
 import { HttpError } from "../../shared/httpError.js";
 import { recordAuditLog } from "../audit/audit.service.js";
 import { IndexedVoterRegistrationModel } from "../indexing/indexedVoterRegistration.model.js";
+import { toDisplayName } from "../wallet/index.js";
 import { RegistrationRequestModel, type RegistrationRequestDocument } from "./admin.model.js";
 import type { RegistrationRequestStatus, RegistrationRequestSummary } from "./admin.types.js";
 
@@ -68,10 +77,12 @@ async function fetchOnChainConfirmed(electionId: number, voterAddress: string): 
 
 async function toSummary(doc: RegistrationRequestDocument): Promise<RegistrationRequestSummary> {
   const onChainConfirmed = await fetchOnChainConfirmed(doc.electionId, doc.voterAddress);
+  const voterDisplayName = await toDisplayName(doc.voterAddress);
   return {
     id: doc._id.toString(),
     electionId: doc.electionId,
     voterAddress: doc.voterAddress,
+    voterDisplayName,
     status: doc.status,
     onChainConfirmed,
     requestedAt: doc.createdAt.toISOString(),

@@ -18,7 +18,13 @@ import request from "supertest";
 import type { Express } from "express";
 import { SiweMessage } from "siwe";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import type { CandidateData, ElectionData, IElectionContractClient, TransactionResult } from "../../src/modules/blockchain/index.js";
+import type {
+  CandidateData,
+  ElectionData,
+  IElectionContractClient,
+  IVoterRegistryContractClient,
+  TransactionResult,
+} from "../../src/modules/blockchain/index.js";
 
 const REQUIRED_ENV = {
   NODE_ENV: "test",
@@ -75,11 +81,48 @@ class FakeElectionContractClient implements IElectionContractClient {
   finalizeElection(): Promise<TransactionResult> {
     throw new Error("not used by these tests");
   }
+
+  /** Mutable per-test - see requireRole's "check both contracts, OR" design. Defaults to true (admin). */
+  hasRoleResult = true;
+
+  async hasRole(): Promise<boolean> {
+    return this.hasRoleResult;
+  }
+}
+
+/**
+ * Minimal fake IVoterRegistryContractClient - election.routes.ts's admin
+ * endpoints don't call anything on this interface directly, but
+ * requireRole (auth.roles.middleware.ts) checks BOTH contracts' hasRole
+ * and ORs the result (approved design fork - see that file's header
+ * comment), so a fake is needed here too, or these tests would hit a
+ * real (unreachable in-sandbox) RPC call via the lazily-constructed
+ * default VoterRegistryContractClient.
+ */
+class FakeVoterRegistryContractClient implements IVoterRegistryContractClient {
+  hasRoleResult = false;
+
+  isRegisteredForElection(): Promise<boolean> {
+    throw new Error("not used by these tests");
+  }
+
+  registerVoter(): Promise<TransactionResult> {
+    throw new Error("not used by these tests");
+  }
+
+  removeVoter(): Promise<TransactionResult> {
+    throw new Error("not used by these tests");
+  }
+
+  async hasRole(): Promise<boolean> {
+    return this.hasRoleResult;
+  }
 }
 
 let mongod: MongoMemoryServer;
 let app: Express;
 let fakeClient: FakeElectionContractClient;
+let fakeVoterRegistryClient: FakeVoterRegistryContractClient;
 let ElectionMetadataModel: typeof import("../../src/modules/election/election.model.js").ElectionMetadataModel;
 let IndexedElectionModel: typeof import("../../src/modules/indexing/indexedElection.model.js").IndexedElectionModel;
 let SESSION_COOKIE_NAME: string;
@@ -103,6 +146,9 @@ beforeAll(async () => {
   fakeClient = new FakeElectionContractClient();
   blockchain._setElectionContractClientForTests(fakeClient);
 
+  fakeVoterRegistryClient = new FakeVoterRegistryContractClient();
+  blockchain._setVoterRegistryContractClientForTests(fakeVoterRegistryClient);
+
   await dbConnection.connectDatabase();
   app = appModule.buildApp();
 }, 300_000);
@@ -114,6 +160,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   fakeClient.elections.clear();
+  fakeClient.hasRoleResult = true;
+  fakeVoterRegistryClient.hasRoleResult = false;
 });
 
 afterEach(async () => {
@@ -354,6 +402,31 @@ describe("Election module - POST /elections/draft", () => {
 
     const stored = await ElectionMetadataModel.findOne({ title: "New Election" });
     expect(stored).not.toBeNull();
+  });
+
+  it("returns 403 FORBIDDEN_ROLE when the wallet holds ELECTION_ADMINISTRATOR_ROLE on neither contract", async () => {
+    fakeClient.hasRoleResult = false;
+    fakeVoterRegistryClient.hasRoleResult = false;
+    const { cookie } = await getAuthenticatedCookie();
+    const res = await request(app)
+      .post("/elections/draft")
+      .set("Cookie", cookie)
+      .send({ title: "Should Be Blocked", description: "" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN_ROLE");
+  });
+
+  it("allows the request when the wallet holds the role on VoterRegistry only, not Election (OR semantics)", async () => {
+    fakeClient.hasRoleResult = false;
+    fakeVoterRegistryClient.hasRoleResult = true;
+    const { cookie } = await getAuthenticatedCookie();
+    const res = await request(app)
+      .post("/elections/draft")
+      .set("Cookie", cookie)
+      .send({ title: "Allowed Via VoterRegistry Role", description: "" });
+
+    expect(res.status).toBe(201);
   });
 });
 

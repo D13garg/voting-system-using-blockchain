@@ -2,14 +2,19 @@
 //
 // Same testing approach as the other domain modules: real in-memory
 // MongoDB, real HTTP requests via supertest, real SIWE-authenticated
-// sessions. UNLIKE the other modules' test files, there is no fake
-// chain-contract-client here anymore - decision (a)'s Admin module
-// migration (see admin.service.ts's header comment) removed the last
-// live IVoterRegistryContractClient call from this module entirely, so
-// onChainConfirmed is now seeded directly via IndexedVoterRegistrationModel
-// (simulating the worker having already processed the relevant
+// sessions. Domain reads never call the chain live - onChainConfirmed is
+// seeded directly via IndexedVoterRegistrationModel (simulating the
+// worker having already processed the relevant
 // VoterRegistered/VoterRemoved events), same approach as
-// election.test.ts's seedMirror helper.
+// election.test.ts's seedMirror helper. A minimal fake
+// IElectionContractClient/IVoterRegistryContractClient pair IS needed
+// again as of the on-chain-role-enforcement gap (HANDOFF.md's "Newly
+// discovered pre-frontend items", item 1) - the approve/reject endpoints
+// now call requireRole, which checks hasRole() on both contracts, so
+// these tests need something other than a real (in-sandbox-unreachable)
+// RPC call to answer that check. Role-check-only fakes, not full
+// re-implementations - nothing else in this module touches either
+// interface.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MongoMemoryServer } from "mongodb-memory-server";
@@ -18,6 +23,13 @@ import request from "supertest";
 import type { Express } from "express";
 import { SiweMessage } from "siwe";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import type {
+  IElectionContractClient,
+  IVoterRegistryContractClient,
+  ElectionData,
+  CandidateData,
+  TransactionResult,
+} from "../../src/modules/blockchain/index.js";
 
 const REQUIRED_ENV = {
   NODE_ENV: "test",
@@ -36,8 +48,56 @@ const REQUIRED_ENV = {
   SIWE_SESSION_TTL_SECONDS: "86400",
 };
 
+/** Role-check-only fake - see this file's header comment. Defaults to true (admin). */
+class FakeElectionContractClient implements IElectionContractClient {
+  hasRoleResult = true;
+
+  getElection(): Promise<ElectionData> {
+    throw new Error("not used by these tests");
+  }
+  getCandidate(): Promise<CandidateData> {
+    throw new Error("not used by these tests");
+  }
+  hasVoted(): Promise<boolean> {
+    throw new Error("not used by these tests");
+  }
+  electionCount(): Promise<bigint> {
+    throw new Error("not used by these tests");
+  }
+  isPaused(): Promise<boolean> {
+    throw new Error("not used by these tests");
+  }
+  finalizeElection(): Promise<TransactionResult> {
+    throw new Error("not used by these tests");
+  }
+  async hasRole(): Promise<boolean> {
+    return this.hasRoleResult;
+  }
+}
+
+/** Role-check-only fake - see this file's header comment. Defaults to false, matching election.test.ts's/candidate.test.ts's convention. */
+class FakeVoterRegistryContractClient implements IVoterRegistryContractClient {
+  hasRoleResult = false;
+
+  isRegisteredForElection(): Promise<boolean> {
+    throw new Error("not used by these tests");
+  }
+  registerVoter(): Promise<TransactionResult> {
+    throw new Error("not used by these tests");
+  }
+  removeVoter(): Promise<TransactionResult> {
+    throw new Error("not used by these tests");
+  }
+  async hasRole(): Promise<boolean> {
+    return this.hasRoleResult;
+  }
+}
+
+
 let mongod: MongoMemoryServer;
 let app: Express;
+let fakeElectionClient: FakeElectionContractClient;
+let fakeVoterRegistryClient: FakeVoterRegistryContractClient;
 let RegistrationRequestModel: typeof import("../../src/modules/admin/admin.model.js").RegistrationRequestModel;
 let IndexedVoterRegistrationModel: typeof import("../../src/modules/indexing/indexedVoterRegistration.model.js").IndexedVoterRegistrationModel;
 let AuditLogModel: typeof import("../../src/modules/audit/audit.model.js").AuditLogModel;
@@ -48,6 +108,7 @@ beforeAll(async () => {
 
   Object.assign(process.env, REQUIRED_ENV, { MONGODB_URI: mongod.getUri() });
 
+  const blockchain = await import("../../src/modules/blockchain/index.js");
   const adminModel = await import("../../src/modules/admin/admin.model.js");
   const indexedVoterRegistrationModel = await import("../../src/modules/indexing/indexedVoterRegistration.model.js");
   const auditModelModule = await import("../../src/modules/audit/audit.model.js");
@@ -60,6 +121,12 @@ beforeAll(async () => {
   AuditLogModel = auditModelModule.AuditLogModel;
   SESSION_COOKIE_NAME = authRoutes.SESSION_COOKIE_NAME;
 
+  fakeElectionClient = new FakeElectionContractClient();
+  blockchain._setElectionContractClientForTests(fakeElectionClient);
+
+  fakeVoterRegistryClient = new FakeVoterRegistryContractClient();
+  blockchain._setVoterRegistryContractClientForTests(fakeVoterRegistryClient);
+
   await dbConnection.connectDatabase();
   app = appModule.buildApp();
 }, 300_000);
@@ -67,6 +134,11 @@ beforeAll(async () => {
 afterAll(async () => {
   await mongoose.disconnect();
   if (mongod) await mongod.stop();
+});
+
+beforeEach(() => {
+  fakeElectionClient.hasRoleResult = true;
+  fakeVoterRegistryClient.hasRoleResult = false;
 });
 
 afterEach(async () => {
@@ -136,6 +208,10 @@ describe("Admin module - POST /voters/register-request", () => {
 
     expect(res.status).toBe(201);
     expect(res.body.request).toMatchObject({ electionId: 0, voterAddress: address, status: "pending" });
+    // Wallet module wiring (item 2) - no ENS RPC configured in REQUIRED_ENV,
+    // so this degrades to the checksummed address itself, not an ENS name.
+    // See wallet.service.ts's toDisplayName/resolveEnsName header comments.
+    expect(res.body.request.voterDisplayName).toBe(address);
   });
 
   it("returns 409 when a pending request already exists for the same wallet and election", async () => {
@@ -297,5 +373,22 @@ describe("Admin module - POST /admin/registration-requests/:id/approve and /reje
     const res = await request(app).post(`/admin/registration-requests/${requestId}/reject`).set("Cookie", adminCookie);
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("REGISTRATION_REQUEST_ALREADY_REVIEWED");
+  });
+
+  it("returns 403 FORBIDDEN_ROLE when the wallet holds ELECTION_ADMINISTRATOR_ROLE on neither contract", async () => {
+    const { cookie: voterCookie } = await getAuthenticatedCookie();
+    const { cookie: nonAdminCookie } = await getAuthenticatedCookie();
+    const createRes = await request(app).post("/voters/register-request").set("Cookie", voterCookie).send({ electionId: 0 });
+    const requestId = createRes.body.request.id as string;
+
+    fakeElectionClient.hasRoleResult = false;
+    fakeVoterRegistryClient.hasRoleResult = false;
+
+    const res = await request(app).post(`/admin/registration-requests/${requestId}/approve`).set("Cookie", nonAdminCookie);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN_ROLE");
+
+    const stored = await RegistrationRequestModel.findById(requestId);
+    expect(stored?.status).toBe("pending");
   });
 });

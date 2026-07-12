@@ -67,6 +67,19 @@ export interface IElectionContractClient {
   isPaused(): Promise<boolean>;
 
   /**
+   * Whether `account` currently holds `role` (an AccessControl role hash,
+   * see blockchain/roles.ts) on THIS contract's own AccessControl state.
+   * Role grants are per-contract-instance (AccessRoles.sol's constructor
+   * runs once per deployment) - Election and VoterRegistry do not share
+   * role storage, so this can disagree with
+   * IVoterRegistryContractClient.hasRole for the same role/account pair
+   * if they've been granted/revoked independently since deployment. Used
+   * by auth.roles.middleware.ts's requireRole for real on-chain
+   * authorization checks on admin-facing write endpoints.
+   */
+  hasRole(role: `0x${string}`, account: `0x${string}`): Promise<boolean>;
+
+  /**
    * Submits a finalizeElection() transaction. Rare backend-initiated write
    * (see TransactionResult's doc comment) - in the primary user journey
    * this is signed by an admin's own wallet directly from the frontend,

@@ -33,6 +33,8 @@ export type { LogSyncCheckpoint, LogSyncResult } from "./events.js";
 
 export { estimateVoteGas, estimateRegisterVoterGas } from "./gas.js";
 
+export { ELECTION_ADMINISTRATOR_ROLE, SYSTEM_ADMINISTRATOR_ROLE } from "./roles.js";
+
 /**
  * Default, ready-to-use singleton instances for the common case (Phase 5
  * domain modules that just need "the" Election/VoterRegistry client

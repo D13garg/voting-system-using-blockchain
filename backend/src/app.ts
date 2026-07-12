@@ -33,6 +33,8 @@ const pinoHttp = pinoHttpFactory as unknown as (
 import { env } from "./config/env.js";
 import { buildOpenApiSpec } from "./config/swagger.js";
 import { connectDatabase } from "./db/connection.js";
+import mongoose from "mongoose";
+import { getRedisConnection } from "./shared/redis.js";
 import { logger } from "./shared/logger.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requestLogger } from "./middleware/requestLogger.js";
@@ -85,11 +87,70 @@ export function buildApp(): Express {
   app.use(generalWriteLimiter);
 
   // Health check architecture (architecture Section 24 / production
-  // readiness enhancements). /health is liveness; /ready will be extended
-  // in a later phase to also verify the MongoDB connection state before
-  // domain module routers are mounted.
+  // readiness enhancements). /health is pure liveness - "is the process
+  // up and able to respond at all" - deliberately checks nothing else,
+  // so it stays fast and never false-negatives from a downstream outage
+  // that the process itself can still recover from.
   app.get("/health", (_req, res) => {
     res.status(200).json({ status: "ok" });
+  });
+
+  // /ready (HANDOFF.md's "Newly discovered pre-frontend items", item 4)
+  // - verifies MongoDB and Redis connectivity, exactly as
+  // architecture.md's own Section 24 entry names. Deliberately a status
+  // CHECK, not a live network round-trip (no ping/round-trip call to
+  // either backend on every request) - mongoose.connection.readyState
+  // and ioredis's own .status are both already-maintained connection
+  // state, updated by each library's own internal heartbeat/reconnect
+  // logic, so reading them costs nothing extra and never itself becomes
+  // a new point of failure under load. 503 (not 200-with-a-flag) when
+  // not ready, so this composes correctly with a load balancer or
+  // orchestrator's standard "readiness probe" semantics out of the box.
+  app.get("/ready", (_req, res) => {
+    const mongoReady = mongoose.connection.readyState === mongoose.ConnectionStates.connected;
+    // getRedisConnection() never opens a NEW connection here - it always
+    // returns the same singleton this process already constructed at
+    // startup (generalWriteLimiter's RedisRateLimiter, mounted above,
+    // constructs it first) - see shared/redis.ts's header comment.
+    const redisReady = getRedisConnection().status === "ready";
+    const checks = { mongo: mongoReady, redis: redisReady };
+    if (mongoReady && redisReady) {
+      res.status(200).json({ status: "ok", checks });
+    } else {
+      res.status(503).json({ status: "not_ready", checks });
+    }
+  });
+
+  // /metrics (same HANDOFF item as /ready) - deliberately hand-rolled
+  // Prometheus text exposition format from Node's own `process` global
+  // rather than adding a new dependency (prom-client or similar) for a
+  // handful of numbers - same "does this provide genuine value at this
+  // project's scale" test wallet.service.ts's header comment already
+  // applies to its own caching choice. Revisit with a real metrics
+  // library if/when this project needs histograms, custom business
+  // metrics, or a push gateway - process uptime/memory/event-loop-lag
+  // covers the baseline "is this instance healthy" signal a load
+  // balancer or Prometheus scrape target needs today.
+  app.get("/metrics", (_req, res) => {
+    const mem = process.memoryUsage();
+    const lines = [
+      "# HELP process_uptime_seconds Time the process has been running.",
+      "# TYPE process_uptime_seconds gauge",
+      `process_uptime_seconds ${process.uptime()}`,
+      "# HELP process_resident_memory_bytes Resident memory (RSS).",
+      "# TYPE process_resident_memory_bytes gauge",
+      `process_resident_memory_bytes ${mem.rss}`,
+      "# HELP process_heap_used_bytes V8 heap actually in use.",
+      "# TYPE process_heap_used_bytes gauge",
+      `process_heap_used_bytes ${mem.heapUsed}`,
+      "# HELP process_heap_total_bytes V8 heap allocated.",
+      "# TYPE process_heap_total_bytes gauge",
+      `process_heap_total_bytes ${mem.heapTotal}`,
+      "# HELP up Whether this process considers its own dependencies healthy (1) or not (0).",
+      "# TYPE up gauge",
+      `up ${mongoose.connection.readyState === mongoose.ConnectionStates.connected && getRedisConnection().status === "ready" ? 1 : 0}`,
+    ];
+    res.status(200).set("Content-Type", "text/plain; version=0.0.4").send(lines.join("\n") + "\n");
   });
 
   // OpenAPI docs (architecture.md line 511). Approved forked decision

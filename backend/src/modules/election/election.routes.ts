@@ -14,7 +14,8 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { requireAuth } from "../auth/auth.middleware.js";
-import { getElectionContractClient } from "../blockchain/index.js";
+import { requireRole } from "../auth/auth.roles.middleware.js";
+import { ELECTION_ADMINISTRATOR_ROLE, getElectionContractClient } from "../blockchain/index.js";
 import { createDraft, getElectionById, linkOnChainElection, listElections } from "./election.service.js";
 
 export const electionRouter = Router();
@@ -87,7 +88,11 @@ electionRouter.get(
 electionRouter.post(
   "/draft",
   asyncHandler(requireAuth),
+  asyncHandler(requireRole(ELECTION_ADMINISTRATOR_ROLE)),
   asyncHandler(async (req: Request, res: Response) => {
+    if (process.env.NODE_ENV === "test") {
+      console.log(`[election-route] req.body:`, JSON.stringify(req.body));
+    }
     const body = createDraftBodySchema.parse(req.body);
     // requireAuth guarantees res.locals.auth is set - see auth.middleware.ts.
     const election = await createDraft({ ...body, createdBy: res.locals.auth!.address });
@@ -116,6 +121,7 @@ electionRouter.post(
 electionRouter.patch(
   "/draft/:id/link-onchain",
   asyncHandler(requireAuth),
+  asyncHandler(requireRole(ELECTION_ADMINISTRATOR_ROLE)),
   asyncHandler(async (req: Request, res: Response) => {
     const { id } = idParamSchema.parse(req.params);
     const body = linkOnChainBodySchema.parse(req.body);

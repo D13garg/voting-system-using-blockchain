@@ -161,6 +161,20 @@ export class ElectionContractClient implements IElectionContractClient {
     }
   }
 
+  async hasRole(role: `0x${string}`, account: `0x${string}`): Promise<boolean> {
+    try {
+      const result = await readContract(this.publicClient, {
+        address: this.address,
+        abi: electionAbi,
+        functionName: "hasRole",
+        args: [role, account],
+      });
+      return result as boolean;
+    } catch (error) {
+      this.handleError(error, "hasRole", { role, account });
+    }
+  }
+
   private handleError(error: unknown, method: string, context: Record<string, unknown>): never {
     const normalized = normalizeError(error);
     blockchainLogger.error(

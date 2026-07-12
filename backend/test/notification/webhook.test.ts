@@ -207,4 +207,18 @@ describe("Notifications module - enqueueElectionFinalizedWebhooks", () => {
     await enqueueElectionFinalizedWebhooks(3, "Unsubscribed Election");
     expect(fakeQueue.calls).toHaveLength(0);
   });
+
+  it("includes the finalizer's display name in the payload when finalizedBy is provided, null otherwise (item 2 - Wallet module wiring)", async () => {
+    const finalizer = "0x2222222222222222222222222222222222222222";
+    await WebhookPreferenceModel.create([{ electionId: 4, walletAddress: "0xeee", url: "https://e.example.com/hook", secret: "secret-e" }]);
+
+    await enqueueElectionFinalizedWebhooks(4, "Finalized By Test", finalizer);
+    // No RPC_URL_MAINNET_ENS in REQUIRED_ENV, so this degrades to the
+    // checksummed address rather than an ENS name.
+    expect(fakeQueue.calls[0]?.data.payload).toMatchObject({ finalizedBy: finalizer });
+
+    await WebhookPreferenceModel.create([{ electionId: 6, walletAddress: "0xfff", url: "https://f.example.com/hook", secret: "secret-f" }]);
+    await enqueueElectionFinalizedWebhooks(6, "No Finalizer Test");
+    expect(fakeQueue.calls[1]?.data.payload).toMatchObject({ finalizedBy: null });
+  });
 });

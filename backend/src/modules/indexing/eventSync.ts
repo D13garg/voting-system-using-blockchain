@@ -302,8 +302,8 @@ async function handleElectionMirrorLogs(
       await enqueueRollupRecompute(electionId);
       const mirror = await IndexedElectionModel.findOne({ electionId }).lean();
       const title = mirror?.title ?? `Election #${electionId}`;
-      await enqueueElectionFinalizedNotifications(electionId, title);
-      await enqueueElectionFinalizedWebhooks(electionId, title);
+      await enqueueElectionFinalizedNotifications(electionId, title, typedLog.args.finalizedBy);
+      await enqueueElectionFinalizedWebhooks(electionId, title, typedLog.args.finalizedBy);
       // Section 17 audit entry: election state transition.
       await recordAuditLog({
         category: "ELECTION_FINALIZED",

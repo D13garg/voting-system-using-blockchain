@@ -16,6 +16,9 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { requireAuth } from "../auth/auth.middleware.js";
+import { requireRole } from "../auth/auth.roles.middleware.js";
+import { ELECTION_ADMINISTRATOR_ROLE } from "../blockchain/index.js";
+import { toDisplayName } from "../wallet/index.js";
 import {
   getMyRegistrationStatus,
   listRegistrationRequests,
@@ -59,11 +62,13 @@ votersRouter.post(
       electionId: body.electionId,
       voterAddress: res.locals.auth!.address,
     });
+    const voterDisplayName = await toDisplayName(doc.voterAddress);
     res.status(201).json({
       request: {
         id: doc._id.toString(),
         electionId: doc.electionId,
         voterAddress: doc.voterAddress,
+        voterDisplayName,
         status: doc.status,
         requestedAt: doc.createdAt.toISOString(),
       },
@@ -134,6 +139,7 @@ adminRouter.get(
 adminRouter.post(
   "/registration-requests/:id/approve",
   asyncHandler(requireAuth),
+  asyncHandler(requireRole(ELECTION_ADMINISTRATOR_ROLE)),
   asyncHandler(async (req: Request, res: Response) => {
     const { id } = requestIdParamSchema.parse(req.params);
     const request = await reviewRegistrationRequest({
@@ -164,6 +170,7 @@ adminRouter.post(
 adminRouter.post(
   "/registration-requests/:id/reject",
   asyncHandler(requireAuth),
+  asyncHandler(requireRole(ELECTION_ADMINISTRATOR_ROLE)),
   asyncHandler(async (req: Request, res: Response) => {
     const { id } = requestIdParamSchema.parse(req.params);
     const request = await reviewRegistrationRequest({

@@ -12,7 +12,8 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { requireAuth } from "../auth/auth.middleware.js";
-import { getElectionContractClient } from "../blockchain/index.js";
+import { requireRole } from "../auth/auth.roles.middleware.js";
+import { ELECTION_ADMINISTRATOR_ROLE, getElectionContractClient } from "../blockchain/index.js";
 import { listCandidates, setCandidateProfile } from "./candidate.service.js";
 
 export const candidateRouter = Router();
@@ -66,6 +67,7 @@ candidateRouter.get(
 candidateRouter.put(
   "/:id/candidates/:candidateId/profile",
   asyncHandler(requireAuth),
+  asyncHandler(requireRole(ELECTION_ADMINISTRATOR_ROLE)),
   asyncHandler(async (req: Request, res: Response) => {
     const { id, candidateId } = candidateParamsSchema.parse(req.params);
     const body = setProfileBodySchema.parse(req.body);

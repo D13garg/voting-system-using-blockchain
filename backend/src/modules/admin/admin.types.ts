@@ -29,6 +29,15 @@ export interface RegistrationRequestSummary {
   id: string;
   electionId: number;
   voterAddress: string;
+  /**
+   * Wallet module's toDisplayName(voterAddress) (architecture Section
+   * 7.1's "wallet-centric helpers") - the voter's ENS name if one
+   * resolves, otherwise the same checksummed address as voterAddress.
+   * Added so the Admin Dashboard's registration-requests review queue
+   * (architecture Section 9) can show a human-readable name instead of
+   * a raw address, without the frontend needing its own ENS lookup.
+   */
+  voterDisplayName: string;
   status: RegistrationRequestStatus;
   /**
    * Whether the indexed mirror currently reports this wallet as

@@ -3,6 +3,7 @@
 import { randomBytes } from "node:crypto";
 import { HttpError } from "../../shared/httpError.js";
 import { IndexedElectionModel } from "../indexing/indexedElection.model.js";
+import { toDisplayName } from "../wallet/index.js";
 import { enqueueNotification } from "./notification.queue.js";
 import { NotificationPreferenceModel } from "./notificationPreference.model.js";
 import { enqueueWebhook } from "./webhook.queue.js";
@@ -91,18 +92,26 @@ export async function subscribeToElectionStartReminders(input: {
   }
 }
 
-function buildElectionFinalizedEmail(electionId: number, title: string): { subject: string; html: string } {
+function buildElectionFinalizedEmail(electionId: number, title: string, finalizedByDisplayName: string | null): { subject: string; html: string } {
+  const finalizedByLine = finalizedByDisplayName
+    ? `<p>Finalized by <strong>${finalizedByDisplayName}</strong>.</p>`
+    : "";
   return {
     subject: `Election "${title}" results are final`,
-    html: `<p>The election <strong>${title}</strong> (#${electionId}) has been finalized. Results are now available.</p>`,
+    html: `<p>The election <strong>${title}</strong> (#${electionId}) has been finalized. Results are now available.</p>${finalizedByLine}`,
   };
 }
 
-function buildElectionFinalizedWebhookPayload(electionId: number, title: string): Record<string, unknown> {
+function buildElectionFinalizedWebhookPayload(
+  electionId: number,
+  title: string,
+  finalizedByDisplayName: string | null,
+): Record<string, unknown> {
   return {
     event: "election.finalized",
     electionId,
     title,
+    finalizedBy: finalizedByDisplayName,
     finalizedAt: new Date().toISOString(),
   };
 }
@@ -144,12 +153,24 @@ function buildVotingOpenWebhookPayload(electionId: number, title: string): Recor
  * processed. Looks up everyone subscribed to this election and enqueues
  * one dispatch job per recipient - see notification.queue.ts's header
  * comment for why per-recipient jobs, not one fan-out job.
+ *
+ * finalizedBy (the on-chain event's own address argument) is optional -
+ * eventSync.ts's typed log args allow undefined for it - and resolved
+ * once per call via the Wallet module's toDisplayName (Newly discovered
+ * pre-frontend items, item 2: the Wallet module previously had no real
+ * caller anywhere), not once per recipient, since it's the same address
+ * for every recipient of a given finalization.
  */
-export async function enqueueElectionFinalizedNotifications(electionId: number, title: string): Promise<void> {
+export async function enqueueElectionFinalizedNotifications(
+  electionId: number,
+  title: string,
+  finalizedBy?: string,
+): Promise<void> {
   const preferences = await NotificationPreferenceModel.find({ electionId }).lean();
   if (preferences.length === 0) return;
 
-  const { subject, html } = buildElectionFinalizedEmail(electionId, title);
+  const finalizedByDisplayName = finalizedBy ? await toDisplayName(finalizedBy) : null;
+  const { subject, html } = buildElectionFinalizedEmail(electionId, title, finalizedByDisplayName);
   for (const preference of preferences) {
     await enqueueNotification(
       { to: preference.email, subject, html },
@@ -166,11 +187,12 @@ export async function enqueueElectionFinalizedNotifications(electionId: number, 
  * webhookPreference.model.ts and webhook.queue.ts's header comments for
  * why the two channels are kept independent end to end.
  */
-export async function enqueueElectionFinalizedWebhooks(electionId: number, title: string): Promise<void> {
+export async function enqueueElectionFinalizedWebhooks(electionId: number, title: string, finalizedBy?: string): Promise<void> {
   const preferences = await WebhookPreferenceModel.find({ electionId }).lean();
   if (preferences.length === 0) return;
 
-  const payload = buildElectionFinalizedWebhookPayload(electionId, title);
+  const finalizedByDisplayName = finalizedBy ? await toDisplayName(finalizedBy) : null;
+  const payload = buildElectionFinalizedWebhookPayload(electionId, title, finalizedByDisplayName);
   for (const preference of preferences) {
     await enqueueWebhook(
       { url: preference.url, secret: preference.secret, payload },
