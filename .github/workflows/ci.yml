@@ -59,20 +59,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Slither
-        run: pip install slither-analyzer
-
       - name: Run Slither
-        working-directory: contracts
-        run: |
-          slither . \
-            --exclude-dependencies \
-            --exclude-detectors pragma,timestamp
+        uses: crytic/slither-action@v0.4.2
+        with:
+          target: contracts/
+          node-version: ${{ env.NODE_VERSION }}
+          fail-on: high
+          slither-args: --exclude-dependencies
 
   backend-unit:
     name: backend (lint + typecheck + unit tests)
