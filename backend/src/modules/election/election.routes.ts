@@ -90,9 +90,6 @@ electionRouter.post(
   asyncHandler(requireAuth),
   asyncHandler(requireRole(ELECTION_ADMINISTRATOR_ROLE)),
   asyncHandler(async (req: Request, res: Response) => {
-    if (process.env.NODE_ENV === "test") {
-      console.log(`[election-route] req.body:`, JSON.stringify(req.body));
-    }
     const body = createDraftBodySchema.parse(req.body);
     // requireAuth guarantees res.locals.auth is set - see auth.middleware.ts.
     const election = await createDraft({ ...body, createdBy: res.locals.auth!.address });
