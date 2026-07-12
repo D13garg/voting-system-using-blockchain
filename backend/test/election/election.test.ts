@@ -253,6 +253,7 @@ describe("Election module - GET /elections", () => {
       state: "draft",
       electionId: null,
     });
+    
     expect(res.body.elections[0].startTime).toBeUndefined();
   });
 
@@ -425,7 +426,8 @@ describe("Election module - POST /elections/draft", () => {
       .post("/elections/draft")
       .set("Cookie", cookie)
       .send({ title: "Allowed Via VoterRegistry Role", description: "" });
-
+    console.log("STATUS:", res.status);
+    console.log("BODY:", JSON.stringify(res.body, null, 2));
     expect(res.status).toBe(201);
   });
 });

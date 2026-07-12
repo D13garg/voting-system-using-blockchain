@@ -33,7 +33,7 @@ export interface ElectionMetadataDocument extends mongoose.Document {
 const electionMetadataSchema = new Schema<ElectionMetadataDocument>(
   {
     title: { type: String, required: true, trim: true, minlength: 1 },
-    description: { type: String, required: true, default: "" },
+    description: { type: String, required: false, default: "" },
     electionId: { type: Number, default: null },
     linkTransactionHash: { type: String, default: null },
     createdBy: { type: String, required: true },

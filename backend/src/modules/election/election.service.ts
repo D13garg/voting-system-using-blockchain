@@ -191,13 +191,28 @@ export async function getElectionById(id: string): Promise<ElectionSummary> {
 }
 
 export async function createDraft(input: CreateDraftInput): Promise<ElectionSummary> {
-  const doc = await ElectionMetadataModel.create({
-    title: input.title,
-    description: input.description,
-    createdBy: input.createdBy,
-    electionId: null,
-    linkTransactionHash: null,
-  });
+  console.log("INPUT:", input);
+
+  console.log(
+    "Schema paths:",
+    ElectionMetadataModel.schema.obj.description
+  );
+  const data = {
+  title: input.title,
+  description: input.description,
+  createdBy: input.createdBy,
+  electionId: null,
+  linkTransactionHash: null,
+};
+
+const doc = new ElectionMetadataModel(data);
+
+console.log("Before validate:", doc.toObject());
+
+const err = doc.validateSync();
+console.log("validateSync:", err);
+
+await doc.save();
   return toSummary(doc, undefined, new Date());
 }
 
