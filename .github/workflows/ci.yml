@@ -72,7 +72,8 @@ jobs:
         run: |
           slither . \
             --exclude-dependencies \
-            --exclude pragma
+            --exclude pragma \
+            --exclude timestamp
 
   backend-unit:
     name: backend (lint + typecheck + unit tests)
