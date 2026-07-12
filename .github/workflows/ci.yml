@@ -1,18 +1,3 @@
-# CI pipeline (architecture.md Section 24's "production readiness"
-# checklist item, item 3 of HANDOFF.md's "newly discovered pre-frontend
-# items"). Approved forks for this pass (2026-07-12 session):
-#   - Slither runs on every PR/push (matches architecture.md as written,
-#     rather than staying deferred like Sepolia deployment).
-#   - The backend's real-Hardhat-node integration suite (test:integration)
-#     runs in CI too, as its own job, not just the fast unit suite.
-#
-# Branch protection itself (requiring these job names to pass before
-# merge) is a GitHub repo *setting*, not something expressible in this
-# YAML file — after this workflow lands and runs once on a PR so the job
-# names exist, enable it under Settings -> Branches -> Branch protection
-# rules -> require status checks: contracts / contracts-slither /
-# backend-unit / backend-integration / frontend.
-
 name: CI
 
 on:
@@ -21,8 +6,6 @@ on:
   push:
     branches: [main]
 
-# Cancel superseded runs on the same PR/branch so pushes don't queue up
-# stale, already-obsolete jobs.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -35,51 +18,65 @@ jobs:
   contracts:
     name: contracts (lint + hardhat test)
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
       - name: Lint (eslint + solhint)
         run: pnpm --filter contracts lint
-      - name: Hardhat compile + test
+
+      - name: Hardhat tests
         run: pnpm --filter contracts test
 
   contracts-slither:
     name: contracts (Slither static analysis)
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      # Slither auto-detects the Hardhat project and compiles it itself
-      # (same solc version pinned in contracts/hardhat.config.ts); no
-      # separate `hardhat compile` step needed first.
-      - name: Run Slither
-        uses: crytic/slither-action@v0.4.2
-        id: slither
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          target: contracts/
-          node-version: ${{ env.NODE_VERSION }}
-          fail-on: high
-          slither-args: --exclude-dependencies
+          python-version: "3.11"
+
+      - name: Install Slither
+        run: pip install slither-analyzer
+
+      - name: Run Slither
+        working-directory: contracts
+        run: |
+          slither . \
+            --exclude-dependencies
 
   backend-unit:
     name: backend (lint + typecheck + unit tests)
     runs-on: ubuntu-latest
+
     services:
       mongodb:
         image: mongo:7
@@ -90,6 +87,7 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
       redis:
         image: redis:7-alpine
         ports:
@@ -99,66 +97,77 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
       - name: Lint
         run: pnpm --filter backend lint
+
       - name: Typecheck
         run: pnpm --filter backend exec tsc --noEmit
-      - name: Unit tests (real in-memory Mongo + real Redis)
-        run: pnpm --filter backend test
+
+      - name: Unit tests
         env:
           MONGODB_URI: mongodb://127.0.0.1:27017/decentralized-voting-system-ci
           REDIS_URL: redis://127.0.0.1:6379
+        run: pnpm --filter backend test
 
   backend-integration:
     name: backend (real local Hardhat node integration test)
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-      # test/integration/harness.ts spawns `npx hardhat node` from
-      # contracts/ itself and deploys via the real deploy.ts — no service
-      # containers needed here, and no prior `hardhat compile` step either
-      # (the harness's own deploy run triggers it). GitHub-hosted runners
-      # have normal internet access, so binaries.soliditylang.org is
-      # reachable here even though it's blocked in this project's dev
-      # sandbox (see HANDOFF.md's verification-discipline section).
+
       - name: Run integration suite
         run: pnpm --filter backend test:integration
 
   frontend:
     name: frontend (lint + build)
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
       - name: Lint
         run: pnpm --filter frontend lint
+
       - name: Build
         run: pnpm --filter frontend build
