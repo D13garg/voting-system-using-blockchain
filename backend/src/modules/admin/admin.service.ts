@@ -43,7 +43,11 @@
 
 import { HttpError } from "../../shared/httpError.js";
 import { recordAuditLog } from "../audit/audit.service.js";
+import { getElectionContractClient } from "../blockchain/index.js";
+import { listElections } from "../election/election.service.js";
+import type { ElectionSummary } from "../election/election.types.js";
 import { IndexedVoterRegistrationModel } from "../indexing/indexedVoterRegistration.model.js";
+import { hasVoted } from "../voting/voting.service.js";
 import { toDisplayName } from "../wallet/index.js";
 import { RegistrationRequestModel, type RegistrationRequestDocument } from "./admin.model.js";
 import type { RegistrationRequestStatus, RegistrationRequestSummary } from "./admin.types.js";
@@ -192,4 +196,76 @@ export async function getMyRegistrationStatus(
     return { electionId, voterAddress, status: "not_requested", onChainConfirmed };
   }
   return toSummary(doc);
+}
+
+export interface MyElectionStatus {
+  /** Mongo draft id — what /elections/:id (the frontend route) actually expects, per this session's ID-space fix. */
+  id: string;
+  electionId: number;
+  title: string;
+  state: ElectionSummary["state"];
+  registrationStatus: RegistrationRequestStatus | "not_requested";
+  onChainConfirmed: boolean;
+  hasVoted: boolean;
+}
+
+/**
+ * Voter Dashboard's data source (frontend Phase 4 session, 2026-07-13
+ * design doc - see HANDOFF.md). APPROVED ARCHITECTURAL DECISION: this is
+ * the first function in the backend that imports another domain
+ * module's service directly (`election.service`'s listElections,
+ * `voting.service`'s hasVoted) - every other cross-module dependency in
+ * this codebase before this function was a shared-infra import
+ * (blockchain/wallet/audit), never one domain module reaching into
+ * another. The user's explicit call was to accept this coupling and
+ * reuse the already-tested logic in each module, rather than
+ * duplicating election-listing/hasVoted reads inside this module to
+ * preserve the prior domain-module independence. If a second consumer
+ * ever needs the same combination, extracting a shared read-path helper
+ * would be the natural next step - but one call site doesn't justify
+ * that abstraction yet.
+ *
+ * SHAPE: only returns elections the wallet has SOME relationship with
+ * (a registration request exists, OR the mirror confirms on-chain
+ * registration, OR the wallet has voted) - a personal dashboard, not a
+ * copy of Landing's full list annotated per-row.
+ *
+ * COST: does one live `hasVoted()` contract read per non-draft election
+ * (via the shared IElectionContractClient, batched with Promise.all, not
+ * one request-response round trip per election the way an equivalent
+ * frontend-side fan-out would have been - the user's approved
+ * alternative to that). This scales with total election count, not
+ * votes cast; fine at this project's scale, worth revisiting (e.g. a
+ * multicall batch, or migrating hasVoted onto the indexed mirror the way
+ * results already did) if that count ever grows large. Not built now -
+ * no evidence yet that it needs to be.
+ */
+export async function getMyElectionStatuses(voterAddress: string): Promise<MyElectionStatus[]> {
+  const elections = (await listElections()).filter(
+    (election): election is ElectionSummary & { electionId: number } => election.electionId !== null,
+  );
+
+  const client = getElectionContractClient();
+  const perElection = await Promise.all(
+    elections.map(async (election) => {
+      const [registration, voted] = await Promise.all([
+        getMyRegistrationStatus(election.electionId, voterAddress),
+        hasVoted(election.electionId, voterAddress as `0x${string}`, client),
+      ]);
+      const result: MyElectionStatus = {
+        id: election.id,
+        electionId: election.electionId,
+        title: election.title,
+        state: election.state,
+        registrationStatus: registration.status,
+        onChainConfirmed: registration.onChainConfirmed,
+        hasVoted: voted,
+      };
+      return result;
+    }),
+  );
+
+  return perElection.filter(
+    (status) => status.registrationStatus !== "not_requested" || status.onChainConfirmed || status.hasVoted,
+  );
 }

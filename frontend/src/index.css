@@ -1,3 +1,116 @@
+/* Design tokens ("civic ledger" system) — see tailwind.config.js's own
+   header comment for the rationale of using CSS variables + the
+   rgb(var(--x) / <alpha-value>) pattern instead of raw hex in the Tailwind
+   config. Values below are the single source of truth for both modes;
+   changing a color means editing exactly one line here, never a scattered
+   hex literal in a component. Every token pair (DEFAULT/subtle) keeps the
+   same *meaning* across modes: confirmed is always "this is on-chain and
+   final", pending is always "provisional, not yet confirmed" — only the
+   exact value shifts for contrast against each mode's surface. */
+:root {
+  color-scheme: light;
+
+  --color-bg: 247 248 250; /* #F7F8FA */
+  --color-surface: 255 255 255; /* #FFFFFF */
+  --color-border: 228 231 236; /* #E4E7EC */
+  --color-text: 15 23 42; /* #0F172A */
+  --color-text-muted: 100 116 139; /* #64748B */
+
+  --color-accent: 79 70 229; /* #4F46E5 indigo */
+  --color-accent-foreground: 255 255 255;
+
+  --color-confirmed: 15 157 110; /* #0F9D6E emerald — reserved for on-chain-confirmed state, nowhere else */
+  --color-confirmed-subtle: 220 245 235; /* badge background tint */
+
+  --color-pending: 201 138 43; /* #C98A2B amber — provisional / not yet confirmed */
+  --color-pending-subtle: 250 235 210;
+
+  --color-danger: 220 38 38; /* #DC2626 */
+  --color-danger-subtle: 254 226 226;
+
+  /* Landing-page hero wash only (Stripe-like soft diagonal gradient) */
+  --color-hero-a: 224 231 255; /* pale indigo */
+  --color-hero-b: 255 237 213; /* pale amber */
+  --color-hero-c: 209 250 229; /* pale emerald */
+}
+
+.dark {
+  color-scheme: dark;
+
+  --color-bg: 11 13 16; /* #0B0D10 */
+  --color-surface: 20 23 28; /* #14171C */
+  --color-border: 35 39 46; /* #23272E */
+  --color-text: 243 244 246; /* #F3F4F6 */
+  --color-text-muted: 139 144 154; /* #8B909A */
+
+  --color-accent: 108 111 240; /* #6C6FF0 — brighter than light mode for contrast on dark surfaces */
+  --color-accent-foreground: 255 255 255;
+
+  --color-confirmed: 34 197 94; /* #22C55E */
+  --color-confirmed-subtle: 20 45 33;
+
+  --color-pending: 245 166 35; /* #F5A623 */
+  --color-pending-subtle: 51 39 15;
+
+  --color-danger: 248 113 113; /* #F87171 */
+  --color-danger-subtle: 55 20 20;
+
+  /* Dark mode deliberately has NO hero gradient — Snapshot/Etherscan-style
+     discipline stays data-dense and quiet, unlike the light-mode landing
+     hero. These three still need a value (Tailwind can't conditionally
+     omit a utility per-mode), so they collapse to the plain surface color
+     — the gradient utility becomes a no-op wash in dark mode by design. */
+  --color-hero-a: 20 23 28;
+  --color-hero-b: 20 23 28;
+  --color-hero-c: 20 23 28;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    font-family: theme("fontFamily.sans");
+  }
+
+  body {
+    @apply bg-bg text-ink antialiased;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: theme("fontFamily.display");
+  }
+
+  /* Wallet addresses, tx hashes, block numbers, vote counts — anywhere
+     this class is used, it means "this is real chain data", never a
+     stylistic choice. */
+  .font-chain-data {
+    font-family: theme("fontFamily.mono");
+    font-feature-settings: "tnum" 1; /* tabular figures for aligned counts */
+  }
+
+  /* Quality floor (frontend-design skill): visible keyboard focus on every
+     interactive element, using the theme accent — never suppressed. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--color-accent));
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: rgb(var(--color-accent) / 0.25);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}

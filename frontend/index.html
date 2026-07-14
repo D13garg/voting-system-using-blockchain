@@ -4,6 +4,41 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Decentralized Voting System</title>
+    <meta
+      name="description"
+      content="A tamper-resistant, publicly verifiable voting platform on Ethereum."
+    />
+    <!-- Design token fonts: Fraunces (display), Public Sans (body/UI —
+         the U.S. federal design system's own typeface), IBM Plex Mono
+         (chain data only). See tailwind.config.js's fontFamily comment
+         for the full rationale. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..700;1,9..144,400..600&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Inline theme-class bootstrap, before any React/CSS loads, so a
+         returning dark-mode user never sees a light-mode flash. Mirrors
+         exactly what stores/themeStore.ts persists — see that file's
+         header comment. Deliberately the only inline script in this
+         file. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("dvs-theme");
+          var theme =
+            stored === "dark" || stored === "light"
+              ? stored
+              : window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          if (theme === "dark") document.documentElement.classList.add("dark");
+        } catch {
+          /* localStorage unavailable (private mode, etc.) — default light, harmless */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

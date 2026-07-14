@@ -1,3 +1,15 @@
+// MUST be the first import in this file: dotenv has to populate
+// process.env before anything below (transitively including
+// src/config/env.ts, which parses process.env at import time) runs. This
+// was a genuine gap until now — no dotenv import existed anywhere in this
+// backend, so `backend/.env` was only ever actually loaded inside Docker
+// (docker-compose.yml's env_file: directive), never for plain local
+// `pnpm dev:api`/`start:api`. Caught by the user's real local run
+// (2026-07-13), not by any test — every backend test sets env vars
+// directly via `Object.assign(process.env, REQUIRED_ENV, ...)`, which
+// never exercises this loading path at all.
+import "dotenv/config";
+
 // API process entrypoint (ADR-002: this is one of two independently
 // deployed processes — see worker/worker.ts for the other).
 //

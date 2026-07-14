@@ -1,15 +1,42 @@
-// Phase 1 placeholder. Wagmi/RainbowKit provider setup (lib/wagmiConfig.ts),
-// React Router routes, and the real page components (Section 9) are built
-// in Phase 4 (Frontend — core flows), once Phase 2's contracts are deployed
-// and there is something real for the wallet-connection flow to talk to.
+// Phase 4 (Frontend — core flows) entrypoint. Replaces the Phase 1
+// placeholder. Provider order matters: Wagmi must wrap RainbowKit (its
+// hooks), React Query must wrap Wagmi (Wagmi v2's own internal caching
+// dependency), RainbowKit must wrap the router (its modals use React
+// context that needs to be available wherever WalletConnectButton is
+// rendered, i.e. inside Layout/Header).
+import { WagmiProvider } from "wagmi";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RainbowKitProvider, darkTheme, lightTheme } from "@rainbow-me/rainbowkit";
+import { RouterProvider } from "react-router-dom";
+import "@rainbow-me/rainbowkit/styles.css";
+
+import { wagmiConfig } from "./lib/wagmiConfig.js";
+import { router } from "./router.js";
+import { useThemeStore } from "./stores/themeStore.js";
+
+const queryClient = new QueryClient();
+
+// RainbowKit ships its own theme system, separate from our Tailwind
+// tokens (its modal is rendered outside the app's normal DOM styling
+// scope). Mapped here to our accent/surface colors so the connect modal
+// doesn't look like a different product — everything else in the app
+// uses WalletConnectButton's ConnectButton.Custom render instead, which
+// bypasses RainbowKit's styling entirely (see that file's header
+// comment); this theme only affects RainbowKit's own popup modals
+// (connect wallet picker, account modal, chain switcher).
+const rainbowLight = lightTheme({ accentColor: "#4F46E5", accentColorForeground: "#FFFFFF", borderRadius: "medium" });
+const rainbowDark = darkTheme({ accentColor: "#6C6FF0", accentColorForeground: "#FFFFFF", borderRadius: "medium" });
 
 export default function App(): JSX.Element {
+  const theme = useThemeStore((s) => s.theme);
+
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">
-      <div className="text-center">
-        <h1 className="text-2xl font-semibold">Decentralized Voting System</h1>
-        <p className="mt-2 text-slate-400">Phase 1 scaffold — implementation begins Phase 2.</p>
-      </div>
-    </main>
+    <WagmiProvider config={wagmiConfig}>
+      <QueryClientProvider client={queryClient}>
+        <RainbowKitProvider theme={theme === "dark" ? rainbowDark : rainbowLight}>
+          <RouterProvider router={router} />
+        </RainbowKitProvider>
+      </QueryClientProvider>
+    </WagmiProvider>
   );
 }

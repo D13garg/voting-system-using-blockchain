@@ -20,6 +20,7 @@ import { requireRole } from "../auth/auth.roles.middleware.js";
 import { ELECTION_ADMINISTRATOR_ROLE } from "../blockchain/index.js";
 import { toDisplayName } from "../wallet/index.js";
 import {
+  getMyElectionStatuses,
   getMyRegistrationStatus,
   listRegistrationRequests,
   reviewRegistrationRequest,
@@ -95,6 +96,27 @@ votersRouter.get(
     const { electionId } = electionIdParamSchema.parse(req.params);
     const status = await getMyRegistrationStatus(electionId, res.locals.auth!.address);
     res.status(200).json({ status });
+  }),
+);
+
+/**
+ * @openapi
+ * /voters/me/elections:
+ *   get:
+ *     summary: Every election the authenticated wallet has a relationship with (requested, registered, or voted)
+ *     tags: [Admin]
+ *     responses:
+ *       200:
+ *         description: Voter Dashboard's data source (frontend Phase 4, 2026-07-13 design doc) - see admin.service.ts's getMyElectionStatuses for the approved cross-module-import decision behind this endpoint.
+ *       401:
+ *         description: Authentication required.
+ */
+votersRouter.get(
+  "/me/elections",
+  asyncHandler(requireAuth),
+  asyncHandler(async (req: Request, res: Response) => {
+    const statuses = await getMyElectionStatuses(res.locals.auth!.address);
+    res.status(200).json({ elections: statuses });
   }),
 );
 

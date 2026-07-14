@@ -20,9 +20,10 @@ explain it, propose options with trade-offs, wait for approval.
 Industry-level code only, no shortcuts. Each phase/module gets a short
 technical design doc (objective, files, forked decisions via
 `ask_user_input_v0` with real tradeoffs) before coding starts, and
-explicit approval on any forked decision before implementing. Prefer
-direct file output (`present_files`) over zips for 1-3 changed files;
-package a zip and describe the diff in prose for more than that.
+explicit approval on any forked decision before implementing. **File
+delivery: always individual files via `present_files`, never zips**
+(user's explicit call, 2026-07-13 session — supersedes this doc's
+earlier "zip if >3 files" rule).
 
 ## The verification discipline — the single most important thing here
 
@@ -192,9 +193,133 @@ frontend needs). **CONFIRMED by the user's real test run** (the 120/120
 count above already reflects this), committed and pushed to `main`
 (`dfab3fa..16e3ed4`).
 
-### Frontend (Phase 4) — NOT STARTED
-Independent of everything above. Deliberately held off — see "Next
-steps" below for why.
+### Frontend (Phase 4) — scaffold slice DONE and verified; page content NOT started
+
+Phase 4 was explicitly NOT started as a monolith — it's being built in
+slices, each with its own short design doc + forked-decision approval,
+same discipline as the backend gaps above. **This first slice is the
+foundational layer only**: design tokens/theme system, routing,
+Wagmi/RainbowKit provider setup, SIWE auth flow, wallet-connect
+components. Every page under `frontend/src/pages/` is still a placeholder
+— real page content (election list, voting UI, admin forms) is future
+slices, deliberately deferred so this layer existed first for every page
+to build on rather than each page reinventing wallet/theme/auth context.
+See `PHASE4_SCAFFOLD_MANIFEST.md` at repo root for the full file-by-file
+list; summarized here are the actual **design decisions**, since those
+are durable and worth knowing without re-reading the whole manifest:
+
+**Approved forked decisions (Phase 4 scaffold design doc):**
+- **Local UI state (non-wallet, non-server): Zustand**, not React Context
+  — currently used for exactly one thing, the theme store
+  (`frontend/src/stores/themeStore.ts`). Wallet/chain state stays in
+  Wagmi, server data in React Query — this store never grows to hold
+  either.
+- **Contract addresses: `shared/contract-addresses.json`** (per-chain,
+  keyed by chain ID), not frontend-only `.env` vars — matches the
+  `shared/abi/*.json` pattern the backend already established
+  (`backend/src/modules/blockchain/contracts/ElectionContractClient.ts`'s
+  own relative-reach-outside-package import). **Only the frontend side is
+  wired** (`frontend/src/lib/contractAddresses.ts`) — `contracts/scripts/
+  deploy.ts`/`verify.ts` do NOT yet write to this file. Flagged
+  explicitly, not silently left half-done: that's a `contracts`-package
+  change with its own already-tested surface and deserves its own design
+  doc, not a drive-by edit during a frontend session.
+- **Build sequencing:** scaffolding-first (routing/providers/auth), not a
+  wallet-connect vertical slice — user's call, given the design-direction
+  discussion (see below) needed resolving before any component styling
+  made sense anyway.
+
+**Design direction (dual-mode theme, not a forked decision in the
+technical-tradeoff sense, but equally durable — future slices must stay
+consistent with this, not re-litigate it):**
+- **Light mode:** Stripe-like — paper surfaces (`#F7F8FA`/`#FFFFFF`),
+  restrained indigo accent (`#4F46E5`), a soft diagonal hero-gradient wash
+  reserved for the landing-page hero only, nowhere else.
+- **Dark mode:** Snapshot/Etherscan-like — near-black chrome (`#0B0D10`),
+  data-dense, disciplined, brighter accent for dark-surface contrast
+  (`#6C6FF0`), deliberately NO hero gradient (stays quiet/data-dense
+  throughout).
+- **Both modes share the same token *roles*** (`bg`/`surface`/`border`/
+  `ink`/`muted`/`accent`/`confirmed`/`pending`/`danger`), implemented as
+  CSS custom properties under `:root`/`.dark` in `frontend/src/
+  index.css`, consumed via Tailwind's `rgb(var(--x) / <alpha-value>)`
+  pattern in `frontend/tailwind.config.js` — changing a color means
+  editing exactly one line in `index.css`, never a scattered hex literal
+  in a component.
+- **`confirmed` (emerald) is reserved for on-chain-confirmed state only**
+  (vote cast, election finalized, registration approved) — the accent
+  color itself carries meaning, not decoration. `pending` (amber) is
+  provisional/not-yet-confirmed. This convention MUST hold in every future
+  page — a page using emerald for something that isn't an on-chain
+  confirmation breaks the system's one real semantic promise.
+- **Typography:** Fraunces (display/headlines only, never body) + Public
+  Sans (body/UI — deliberately the U.S. federal design system's own
+  typeface, a subject-grounded choice for a civic voting product) + IBM
+  Plex Mono (`.font-chain-data` class — wallet addresses, tx hashes,
+  block numbers, vote counts; functional, not decorative, used
+  throughout, never regular body text for this kind of data).
+- Full reasoning and the real reference sites discussed
+  (tally.xyz, snapshot.org, etherscan.io, stripe.com, linear.app) are in
+  this session's chat history, not repeated in a file — the token
+  values above in `index.css`/`tailwind.config.js` are the actual source
+  of truth going forward.
+
+**Verification (real, not sandbox-approximated — frontend tooling has no
+network restriction, unlike contracts/backend):** `pnpm install` ✅,
+`npx tsc -b --noEmit` ✅ zero errors, `npx eslint .` ✅ zero errors,
+`npx vitest run` ✅ **15/15 tests passing**, `npx vite build` ✅ real
+production build (specifically confirms the `shared/contract-
+addresses.json` cross-package import resolves under Vite's bundler, not
+just under `tsc`'s type-checker). Not yet done: the user has not run
+`pnpm --filter @dvs/frontend dev` and visually confirmed the design
+renders as intended — no automated test substitutes for that, worth doing
+before the next slice builds on top of it.
+
+**Not yet done, called out explicitly:** `RoleGuard` (routes are not yet
+gated by on-chain role — `frontend/src/router.tsx`'s own comment flags
+this); real page content for 6 of 7 pages (Landing is now done — see
+below); the `contracts/scripts` half of the contract-addresses decision.
+
+### Frontend (Phase 4) — Landing page (election list) slice: DONE and verified
+
+Second Phase 4 slice, built on top of the scaffold above. New:
+`frontend/src/hooks/useElections.ts` (React Query wrapper around
+`GET /elections`, 15s poll — user's call), `frontend/src/components/
+ElectionCard.tsx`, `frontend/src/components/ElectionStateStrip.tsx` (the
+scaffold's ledger-strip signature element, built for real here for the
+first time), `frontend/src/pages/Landing.tsx` (rewritten).
+
+**Approved decisions (this slice's design doc):**
+- Cards grouped into sections by state, **Active-now first** (not
+  alphabetical, not chronological) — a visitor's first question is "what
+  can I vote in right now."
+- **15s background poll**, matching the mirror's own lag characteristics
+  (`RECOMMENDED_POLL_INTERVAL_MS` in `backend/src/modules/blockchain`) —
+  this is "reasonably current," not a real-time-chain claim.
+- **Draft elections are hidden from the public Landing page** (Claude's
+  call, user deferred): `electionId === null` drafts are off-chain-only
+  admin work-in-progress with no chain backing — showing them publicly
+  would undercut the app's core promise (what you see is real, confirmed
+  chain state). They'll surface in a future Admin Dashboard view instead,
+  never here.
+
+**A real backend scope gap surfaced building this:**
+`ElectionLifecycleState` only has 5 values, not architecture.md Section
+16's full 8 (Registration Open/Closed and Archived aren't computable
+server-side yet — `election.types.ts`'s own header comment explains why).
+`ElectionStateStrip.tsx` was built for the 4 non-draft states that
+actually exist today, not the full spec — revisit this component's step
+list when those backend gaps close, not before. This is the same kind of
+document-drift the verification discipline above exists to catch; noting
+it here rather than letting the frontend silently paper over it.
+
+**Verification (real):** `npx tsc -b --noEmit` ✅, `npx eslint .` ✅,
+`npx vitest run` ✅ **24/24 tests** across 6 files (this run caught a
+real bug: RTL's automatic cleanup never registered itself because
+`vite.config.ts` has `test.globals: false`, so DOM from one test in a
+multi-render file was leaking into the next — fixed in
+`frontend/src/test/setup.ts` with an explicit `afterEach(cleanup)` — a
+genuine finding, not a formality), `npx vite build` ✅.
 
 ## Backend architecture gaps — ALL 7 CLOSED, kept below as historical record
 
@@ -815,15 +940,225 @@ diagram is sourced from. **All 5 pre-frontend items are now closed.**
    Settings → Branches → branch protection rule on `main` → require
    status checks → select all five job names, now that they exist for
    real.
-6. **Phase 4 (Frontend) has not started** — still genuinely true, no
-   change to `App.tsx` or the Phase-1 placeholder state this session. The
-   user's original plan was to close every pre-frontend item first; with
-   all 5 now done, that condition is fully satisfied — Phase 4 is the
-   clear next piece of work, pending the user's go-ahead.
+6. **Phase 4 (Frontend) scaffold slice is DONE and verified** (2026-07-12
+   session) — design tokens/dual-mode theme, routing, Wagmi/RainbowKit,
+   SIWE auth flow, wallet-connect components. Real `tsc`/`eslint`/
+   `vitest` (15/15)/`vite build` all passed. See the Frontend section
+   above for the full design-decision record and what's explicitly NOT
+   done yet (RoleGuard, real page content, `contracts/scripts` half of
+   the contract-addresses decision).
+7. **Landing page (election list) slice is DONE and verified**
+   (2026-07-13 session) — grouped-by-state cards, 15s poll, drafts hidden
+   from public view, ledger-strip built for real for the first time. Real
+   `tsc`/`eslint`/`vitest` (24/24)/`vite build` all passed; the test run
+   caught a genuine RTL-cleanup bug (see Frontend section above). Also
+   surfaced a real backend scope gap worth remembering: the lifecycle
+   state enum only has 5 values, not Section 16's full 8 — see that
+   section's entry for exactly why.
+8. **Election Detail page slice is DONE and verified** (2026-07-13
+   session) — candidates, registration-gated ballot, hidden-until-ended
+   results, and the first real use of the direct-to-chain write path
+   (`vote()`, wallet-direct per architecture Section 8/9 and
+   `voting.types.ts`'s own header comment — no backend relay exists for
+   it). New: `frontend/src/hooks/useElection.ts`, `useCandidates.ts`,
+   `useElectionResults.ts`, `useHasVoted.ts`, `useRegistrationStatus.ts`,
+   `useCastVote.ts`; `frontend/src/components/CandidateCard.tsx`,
+   `BallotForm.tsx`, `ResultsBar.tsx`, `RegistrationGate.tsx`;
+   `frontend/src/pages/ElectionDetail.tsx` rewritten.
+
+   **A real backend API inconsistency was found and worked around, not
+   silently patched over:** `GET /elections/:id` (`election.routes.ts`)
+   is keyed on the Mongo draft id, but `/elections/:id/candidates`,
+   `/results`, and `/has-voted` are all keyed on the on-chain numeric
+   `electionId` instead — two different ID spaces sharing the same `:id`
+   param name across route files. Resolved by keeping the URL on the
+   Mongo id (no backend change, matches `ElectionCard`'s existing link)
+   and reading `.electionId` off the fetched summary to drive the other
+   three calls — see `useElection.ts`'s header comment. `router.tsx`'s
+   route param was also renamed `:electionId` → `:id` to stop implying
+   it was the on-chain id.
+
+   **The real eligibility gate is `onChainConfirmed`, not `status`:**
+   `admin.types.ts`'s own comment explains these two fields are
+   deliberately independent (an admin can mark a request "approved" in
+   the review queue without having submitted, or without the worker
+   having yet indexed, the actual `registerVoter()` transaction).
+   `RegistrationGate.tsx` gates on `onChainConfirmed` — a `status:
+   "approved"` with `onChainConfirmed: false` correctly still shows a
+   "waiting for on-chain confirmation" notice, not a ballot. Covered by
+   `RegistrationGate.test.tsx`.
+
+   **Approved decisions (this slice's design doc):** results hidden
+   until `voting_ended`/`result_finalized` (avoids bandwagon effects,
+   user's call — a UX choice, not a security boundary, since the
+   endpoint itself is public); vote success is reported only after
+   `useWaitForTransactionReceipt` resolves, not on tx-hash-returned
+   (consistent with the scaffold's "confirmed" token meaning genuinely
+   on-chain-confirmed); the registration-request flow is built inline on
+   this page (no separate Voter Dashboard needed for it).
+
+   **Verification (real):** `npx tsc -b --noEmit` ✅, `npx eslint .` ✅,
+   `npx vitest run` ✅ **41/41 tests** across 10 files — this run caught
+   a second genuine bug, distinct from the RTL-cleanup one: wagmi's
+   `useAccount` export is non-configurable, so `vi.spyOn(wagmi,
+   "useAccount")` throws `Cannot redefine property` at runtime (not a
+   type error — `tsc` was clean). Fixed by `vi.mock("wagmi", ...)`
+   instead of spying on the module namespace — see
+   `RegistrationGate.test.tsx`'s header comment, worth knowing before any
+   future test needs to control wallet state. `npx vite build` ✅.
+
+   **Not done, called out explicitly:** the Voter Dashboard page
+   (`/dashboard`) still shows its own placeholder — it was never the
+   target of this slice; "inline registration flow" above just means
+   this page doesn't *require* that dashboard to exist yet, not that the
+   dashboard itself was built.
+9. **Next slice candidates:** Voter Dashboard (eligibility/vote history
+   across elections — largely reuses hooks already built this session),
+   or Admin Dashboard + Create Election + Registration Requests (all
+   currently placeholders, all admin-role-gated — this is also where
+   `RoleGuard` finally needs to get built, since it's the first place
+   ungated access would actually matter). Get a short design doc first,
+   same discipline as always.
+10. **New backend endpoint: `GET /voters/me/elections`** (2026-07-13
+    session, for the Voter Dashboard slice below). `admin.service.ts`'s
+    new `getMyElectionStatuses()` is **the first function in this
+    backend that imports another domain module's service directly**
+    (`election.service.listElections`, `voting.service.hasVoted`) —
+    every prior cross-module dependency in this codebase was a
+    shared-infra import (`blockchain`/`wallet`/`audit`), never one domain
+    module reaching into another. **User's explicit, approved call**:
+    accept this coupling and reuse the already-tested logic in each
+    module, rather than duplicating election-listing/`hasVoted` reads
+    inside the admin module to preserve the prior independence. Returns
+    only elections the wallet has SOME relationship with (a registration
+    request exists, OR the mirror confirms on-chain registration, OR the
+    wallet has voted) — a personal dashboard, not Landing's full list
+    annotated. Does one live `hasVoted()` contract read per non-draft
+    election (batched with `Promise.all`, not one round-trip per
+    election the way an equivalent frontend-side fan-out — the
+    alternative the user explicitly rejected — would have been); this
+    scales with total election count, not votes cast, and is a candidate
+    for a future multicall/mirror-migration if that count ever grows
+    large, not built now since there's no evidence yet it needs to be.
+    New test: `backend/test/admin/adminMyElections.test.ts` (its own
+    file/app instance, not appended to `admin.test.ts`, because it needed
+    a fake `IElectionContractClient` with a genuinely working
+    `hasVoted()`, unlike `admin.test.ts`'s shared role-check-only fake).
+
+    **Verified in-sandbox:** `tsc -b --noEmit` ✅ clean, `eslint
+    src/modules/admin test/admin` ✅ clean, and `npx vitest run
+    test/middleware/ test/wallet/ test/env.test.ts` ✅ 30/30 (confirms
+    `buildApp()`'s module graph still loads fine with the new
+    cross-module imports). **Could NOT verify in-sandbox** that
+    `adminMyElections.test.ts` itself passes, nor that the existing
+    `admin`/`election`/`voting` suites still pass unchanged — all need
+    `mongodb-memory-server`, blocked by the already-documented
+    `fastdl.mongodb.org` sandbox restriction. **Needs the user's real
+    `pnpm --filter backend test` run to confirm**, same as every other
+    Mongo-backed suite in this document — please run it and report back
+    so this can be marked CONFIRMED, not just in-sandbox-typechecked.
+11. **Voter Dashboard page slice is DONE and verified** (2026-07-13
+    session), built on item 10's endpoint. New: `frontend/src/hooks/
+    useMyElections.ts`, `frontend/src/components/MyElectionRow.tsx` +
+    test, `frontend/src/pages/VoterDashboard.test.tsx`;
+    `VoterDashboard.tsx` rewritten. Same connect/sign-in prompt pattern
+    as `RegistrationGate` (not duplicated logic, just the same visual
+    convention); "Registered" badge is driven by `onChainConfirmed`, not
+    `status`, same rule as `RegistrationGate`.
+
+    **A real bug was caught and fixed before it shipped, not after:**
+    the backend's `getMyElectionStatuses()` initially returned only the
+    on-chain `electionId`, and the first draft of `MyElectionRow`
+    linked to `/elections/${election.electionId}` — which would have
+    routed to the WRONG id space (the frontend's `/elections/:id` route
+    expects the Mongo draft id, per item 8's own ID-space fix earlier
+    this session). Caught during review before running tests, not by
+    the tests themselves: fixed by adding an `id` field (the Mongo draft
+    id) to `MyElectionStatus` on both backend and frontend, and a
+    dedicated test in `adminMyElections.test.ts` now asserts `id` is the
+    Mongo id and not the on-chain number, plus a frontend test in
+    `MyElectionRow.test.tsx` asserts the link href directly. Worth
+    remembering: this exact class of bug (conflating the two ID spaces)
+    is easy to reintroduce in any future component that links to an
+    election from data shaped like `MyElectionStatus`/`ElectionSummary`.
+
+    **Verified in-sandbox (frontend):** `tsc -b --noEmit` ✅, `eslint .`
+    ✅, `npx vitest run` ✅ **52/52 tests** across 13 files, `npx vite
+    build` ✅. Backend-side verification status is unchanged from item
+    10 (still needs the user's real `pnpm --filter backend test` run).
+12. **Real bug found and fixed: `backend/.env` was never actually loaded
+    for local dev** (2026-07-13 session, caught by the user's own first
+    real `pnpm --filter @dvs/backend dev:api` run — every required env
+    var reported `Required` even with a correctly filled-in `.env` file
+    present). Root cause: no `dotenv` package existed anywhere in this
+    backend. `docker-compose.yml`'s `env_file: ./backend/.env` directive
+    only loads it for the Docker-composed `api`/`worker` services — the
+    documented local-dev path (`pnpm --filter @dvs/backend dev:api`,
+    running `tsx watch src/app.ts` directly on the host) was never
+    exercised end-to-end by anyone until now, so this gap sat
+    undetected. No test caught it either: every backend test sets env
+    vars directly via `Object.assign(process.env, REQUIRED_ENV, ...)`
+    before importing `app.ts`, which never exercises `.env`-file loading
+    at all.
+
+    **Fix:** added `dotenv` as a real dependency
+    (`backend/package.json`), and `import "dotenv/config";` as the
+    literal first line of both `backend/src/app.ts` and
+    `backend/worker/worker.ts` — before every other import, since
+    `src/config/env.ts` parses `process.env` at module-load time and
+    could be transitively imported by anything below. Safe for tests:
+    dotenv's default behavior never overwrites a `process.env` key that
+    already exists, so the `Object.assign`-then-import order every test
+    file already uses is unaffected.
+
+    **Verified in-sandbox:** `tsc -b --noEmit` ✅, `eslint src/app.ts
+    worker/worker.ts` ✅, `npx vitest run test/middleware/ test/wallet/
+    test/env.test.ts` ✅ 30/30 unchanged. Full Mongo-backed suite
+    verification still needs the user's real `pnpm --filter backend
+    test` run, same outstanding item as #10/#11 above.
+
+    **Separately, also worth double-checking**: the user's `.env` had
+    contract addresses from an earlier `deploy:local` run
+    (`0x5FbDB2315678afecb367f032d93F642f64180aa3`/
+    `0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512`) that no longer match
+    the addresses their most recent deploy actually printed
+    (`0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0`/
+    `0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9`) — a Hardhat node
+    restart resets the deterministic deploy-address sequence, so `.env`
+    needs updating to match whichever deploy is actually live on the
+    currently-running local chain, not whichever deploy happened first.
+
+    **RESOLVED and CONFIRMED by the user's real run (2026-07-13):** with
+    the `dotenv` fix and corrected contract addresses in place, the
+    actual remaining blocker turned out to be a third, unrelated issue:
+    `BACKEND_SIGNER_PRIVATE_KEY` in the user's `.env` was 65 hex
+    characters, not the required 64 (one extra trailing character,
+    likely a copy/paste slip). Worth noting this did NOT reveal a
+    validation gap — `env.ts`'s zod schema already enforces this exact
+    shape (`z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional()`), so this
+    would have failed loudly with a specific `Invalid environment
+    configuration` message identifying the field, same as every other
+    misconfigured var — the user just hadn't yet gotten far enough past
+    the dotenv-loading gap to see that particular error message before
+    fixing this. No code change needed for this part; recording it here
+    purely as a debugging-history note in case a similar "everything
+    looks right but the API won't start" report comes up again locally.
+    Local dev stack (Hardhat node + Docker Mongo/Redis + backend API +
+    worker + frontend) is now confirmed working end-to-end on the user's
+    machine.
 
 ## Files worth knowing about at repo root
 - `PHASE2_STATUS.md`, `PHASE3_MANIFEST.md` — prior session status notes,
   superseded by this handoff but harmless to keep.
+- `PHASE4_SCAFFOLD_MANIFEST.md` — file-by-file list of this session's
+  Phase 4 scaffold slice (design tokens/theme, routing, wallet/auth). The
+  Frontend section above has the durable design-decision summary; this
+  manifest has the mechanical file list and verification command output.
+- `shared/contract-addresses.json` — per-chain contract addresses
+  (currently placeholder zeros for both `31337`/local and
+  `11155111`/Sepolia — Sepolia deployment is still deferred, see item 4's
+  entry above). Read by `frontend/src/lib/contractAddresses.ts`; NOT yet
+  read by `contracts/scripts` (see Frontend section above).
 - `contracts/verify-compile.cjs` — the sandbox-network-workaround compile
   script described above. Keep it.
 - `.github/workflows/ci.yml` — item 3's CI pipeline. DONE and CONFIRMED

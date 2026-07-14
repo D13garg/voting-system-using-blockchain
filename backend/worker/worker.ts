@@ -45,6 +45,12 @@
 // PublicClient without ever loading this entrypoint file. If that ever
 // changes, apply the same guard pattern app.ts uses.
 
+// MUST be the first import in this file — same reasoning as
+// src/app.ts's identical line: dotenv has to populate process.env before
+// anything below (transitively including src/config/env.ts) runs. See
+// app.ts's header comment for the full story on why this was missing.
+import "dotenv/config";
+
 import { connectDatabase, disconnectDatabase } from "../src/db/connection.js";
 import { logger } from "../src/shared/logger.js";
 import { syncAllEvents } from "../src/modules/indexing/eventSync.js";
