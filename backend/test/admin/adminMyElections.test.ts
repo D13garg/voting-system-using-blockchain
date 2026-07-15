@@ -215,7 +215,13 @@ describe("GET /voters/me/elections", () => {
   it("includes an election confirmed on-chain even with no registration request document (onChainConfirmed OR clause)", async () => {
     await seedElection(2, "Election Two");
     const { cookie, address } = await getAuthenticatedCookie();
-    await IndexedVoterRegistrationModel.create({ electionId: 2, voterAddress: address.toLowerCase(), registered: true });
+    await IndexedVoterRegistrationModel.create({
+      electionId: 2,
+      voterAddress: address.toLowerCase(),
+      registered: true,
+      lastEventBlockNumber: 1n,
+      lastEventLogIndex: 0,
+    });
 
     const res = await request(app).get("/voters/me/elections").set("Cookie", cookie).expect(200);
     expect(res.body.elections).toHaveLength(1);

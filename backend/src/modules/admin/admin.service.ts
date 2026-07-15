@@ -250,7 +250,7 @@ export async function getMyElectionStatuses(voterAddress: string): Promise<MyEle
     elections.map(async (election) => {
       const [registration, voted] = await Promise.all([
         getMyRegistrationStatus(election.electionId, voterAddress),
-        hasVoted(election.electionId, voterAddress as `0x${string}`, client),
+        hasVoted(election.electionId, voterAddress as `0x${string}`, client, { skipExistenceCheck: true }),
       ]);
       const result: MyElectionStatus = {
         id: election.id,

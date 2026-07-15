@@ -96,16 +96,27 @@ export async function getElectionResults(
  * explicitly validates the election exists first and 404s otherwise -
  * "no" and "there's nothing to ask about" are different answers, and an
  * API caller deserves to be able to tell them apart.
+ *
+ * `skipExistenceCheck` lets a caller that has already confirmed the
+ * election exists via another path (e.g. admin.service.ts's
+ * getMyElectionStatuses, which only ever calls this for electionIds it
+ * just read out of the IndexedElection mirror via listElections()) skip
+ * the redundant live getElection() round trip, instead of re-proving
+ * something the caller already knows at the cost of one extra live
+ * contract read per election.
  */
 export async function hasVoted(
   electionId: number,
   voter: `0x${string}`,
   client: IElectionContractClient,
+  options: { skipExistenceCheck?: boolean } = {},
 ): Promise<boolean> {
-  try {
-    await client.getElection(BigInt(electionId));
-  } catch (error) {
-    rethrowAsNotFound(error, electionId);
+  if (!options.skipExistenceCheck) {
+    try {
+      await client.getElection(BigInt(electionId));
+    } catch (error) {
+      rethrowAsNotFound(error, electionId);
+    }
   }
   return client.hasVoted(BigInt(electionId), voter);
 }
