@@ -185,6 +185,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Ensure placeholder contract addresses file exists
+        # shared/contract-addresses.json is gitignored (it's local deploy
+        # output written by contracts/scripts/deploy.ts), so a fresh CI
+        # checkout never has it - but frontend/src/lib/contractAddresses.ts
+        # does a static compile-time import of it, so `tsc -b` fails with
+        # TS2307 without it. An empty object is a valid, already-handled
+        # runtime state (see getContractAddresses/hasDeployedContracts),
+        # so this is a safe placeholder purely to satisfy the build - it's
+        # not used for anything that needs real deployed addresses.
+        run: test -f shared/contract-addresses.json || echo '{}' > shared/contract-addresses.json
+
       - name: Lint
         run: pnpm --filter frontend lint
 
