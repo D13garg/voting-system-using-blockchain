@@ -16,7 +16,7 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { requireAuth } from "../auth/auth.middleware.js";
-import { requireRole } from "../auth/auth.roles.middleware.js";
+import { checkHasRoleOnEitherContract, requireRole } from "../auth/auth.roles.middleware.js";
 import { ELECTION_ADMINISTRATOR_ROLE } from "../blockchain/index.js";
 import { toDisplayName } from "../wallet/index.js";
 import {
@@ -135,6 +135,7 @@ votersRouter.get(
 adminRouter.get(
   "/registration-requests",
   asyncHandler(requireAuth),
+  asyncHandler(requireRole(ELECTION_ADMINISTRATOR_ROLE)),
   asyncHandler(async (req: Request, res: Response) => {
     const { status } = listQuerySchema.parse(req.query);
     const requests = await listRegistrationRequests({ status });
@@ -201,5 +202,29 @@ adminRouter.post(
       reviewedBy: res.locals.auth!.address,
     });
     res.status(200).json({ request });
+  }),
+);
+
+/**
+ * @openapi
+ * /admin/me/role:
+ *   get:
+ *     summary: Whether the authenticated wallet holds ELECTION_ADMINISTRATOR_ROLE (on either contract - see auth.roles.middleware.ts's OR-across-both-contracts doc comment)
+ *     tags: [Admin]
+ *     responses:
+ *       200:
+ *         description: Role check result. RoleGuard's data source (frontend, 2026-07-13 design doc) - a plain read, deliberately NOT gated by requireRole itself (that would make it useless for its own purpose - the point is to find out whether the role is held, not to require it already being held).
+ *       401:
+ *         description: Authentication required.
+ */
+adminRouter.get(
+  "/me/role",
+  asyncHandler(requireAuth),
+  asyncHandler(async (req: Request, res: Response) => {
+    const isElectionAdministrator = await checkHasRoleOnEitherContract(
+      ELECTION_ADMINISTRATOR_ROLE,
+      res.locals.auth!.address as `0x${string}`,
+    );
+    res.status(200).json({ isElectionAdministrator });
   }),
 );

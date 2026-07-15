@@ -392,3 +392,62 @@ describe("Admin module - POST /admin/registration-requests/:id/approve and /reje
     expect(stored?.status).toBe("pending");
   });
 });
+
+// 2026-07-13 session: GET /admin/registration-requests was missing
+// requireRole(ELECTION_ADMINISTRATOR_ROLE) entirely - every sibling
+// write endpoint in this file already had it, this GET was the sole
+// outlier. Found (and fixed) while building the frontend Registration
+// Requests admin page, not by a pre-existing test - beforeEach's default
+// hasRoleResult=true meant every prior test of this endpoint incidentally
+// held the role anyway, so the missing check never surfaced. This
+// explicit non-admin case is the regression test that would have caught
+// it.
+describe("Admin module - GET /admin/registration-requests now requires ELECTION_ADMINISTRATOR_ROLE (2026-07-13 fix)", () => {
+  it("rejects a wallet with no admin role, even if authenticated", async () => {
+    const { cookie } = await getAuthenticatedCookie();
+    fakeElectionClient.hasRoleResult = false;
+    fakeVoterRegistryClient.hasRoleResult = false;
+
+    const res = await request(app).get("/admin/registration-requests").set("Cookie", cookie);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("FORBIDDEN_ROLE");
+  });
+});
+
+// GET /admin/me/role - RoleGuard's data source (frontend, 2026-07-13
+// design doc). Deliberately NOT itself gated by requireRole (see the
+// route's own @openapi comment) - only requireAuth, since the whole
+// point is finding out whether the role is held.
+describe("Admin module - GET /admin/me/role", () => {
+  it("rejects an unauthenticated request with 401", async () => {
+    const res = await request(app).get("/admin/me/role");
+    expect(res.status).toBe(401);
+  });
+
+  it("returns true when the wallet holds the role (default fake state)", async () => {
+    const { cookie } = await getAuthenticatedCookie();
+    const res = await request(app).get("/admin/me/role").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ isElectionAdministrator: true });
+  });
+
+  it("returns false when the wallet holds the role on neither contract", async () => {
+    const { cookie } = await getAuthenticatedCookie();
+    fakeElectionClient.hasRoleResult = false;
+    fakeVoterRegistryClient.hasRoleResult = false;
+
+    const res = await request(app).get("/admin/me/role").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ isElectionAdministrator: false });
+  });
+
+  it("returns true via the OR-across-both-contracts rule, even if only VoterRegistry holds it", async () => {
+    const { cookie } = await getAuthenticatedCookie();
+    fakeElectionClient.hasRoleResult = false;
+    fakeVoterRegistryClient.hasRoleResult = true;
+
+    const res = await request(app).get("/admin/me/role").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ isElectionAdministrator: true });
+  });
+});

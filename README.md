@@ -19,11 +19,12 @@ complete, fully verified.** **Phase 5 (Backend Domain Modules: Auth,
 Election, Voting, Admin, Candidate) — complete.** **Phase 6 (Background
 Worker / event indexer) — complete**, and its indexed Mongo collections
 are now the primary read path for every domain module (decision (a):
-read-migration pass, done). **Phase 4 (Frontend) — scaffold slice done**
-(design tokens/dual-mode theme, routing, Wagmi/RainbowKit, SIWE auth);
-page content not yet built. Full detail, every design decision, and
-current open items are in [`HANDOFF.md`](./HANDOFF.md) — read that, not
-this section, for anything beyond a one-line status check.
+read-migration pass, done). **Phase 4 (Frontend) — all 7 Section 9 pages
+built** (Landing, Election Detail, Voter Dashboard, Admin Dashboard,
+Create Election, Registration Requests, Archive placeholder), local dev
+stack confirmed working end-to-end. Full detail, every design decision,
+and current open items are in [`HANDOFF.md`](./HANDOFF.md) — read that,
+not this section, for anything beyond a one-line status check.
 
 ## Architecture
 

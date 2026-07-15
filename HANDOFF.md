@@ -1146,6 +1146,201 @@ diagram is sourced from. **All 5 pre-frontend items are now closed.**
     Local dev stack (Hardhat node + Docker Mongo/Redis + backend API +
     worker + frontend) is now confirmed working end-to-end on the user's
     machine.
+13. **Admin Dashboard + Registration Requests slice is DONE and
+    verified** (2026-07-13 session) — `RoleGuard`'s first real use, gating
+    every `/admin/*` route. Built with **zero new backend work for the
+    review queue itself** — `GET /admin/registration-requests` and the
+    approve/reject endpoints already existed and were already
+    role-gated.
+
+    **A real security gap was found and fixed while reading these
+    routes, before building on top of them:** `GET
+    /admin/registration-requests` (the list endpoint) was missing
+    `requireRole(ELECTION_ADMINISTRATOR_ROLE)` entirely — every sibling
+    write endpoint in `admin.routes.ts` already had it (approve, reject),
+    this GET was the sole outlier. Any authenticated wallet, not just
+    admins, could previously list every registration request across
+    every election, including other voters' addresses and review status.
+    Fixed by adding the missing middleware. Not caught by any pre-existing
+    test either — `admin.test.ts`'s `beforeEach` defaults the fake role
+    check to `true`, so every prior test of this endpoint incidentally
+    held the role anyway and the gap never surfaced; a new explicit
+    non-admin regression test now covers it.
+
+    **New backend endpoint: `GET /admin/me/role`** — RoleGuard's data
+    source. Per the user's approved decision, this goes through the
+    backend (reusing `requireRole`'s exact `hasRole` check, extracted
+    into a shared `checkHasRoleOnEitherContract()` function so
+    enforcement and this plain-read endpoint share one implementation,
+    not two) rather than a direct on-chain frontend read — keeps "reads
+    go through backend" consistent everywhere, no exception carved out
+    for role checks.
+
+    **New frontend pieces:** `frontend/src/hooks/useAdminRole.ts`,
+    `useRegistrationRequests.ts` (list + approve/reject mutations),
+    `useConfirmRegistration.ts` (the on-chain `registerVoter()` write —
+    deliberately a SEPARATE action from "Approve," not folded into one
+    button: approving is a free off-chain review decision, confirming is
+    a real transaction the admin's own wallet pays gas for, and hiding
+    that distinction behind one button would misrepresent the cost);
+    `frontend/src/components/RoleGuard.tsx`,
+    `RegistrationRequestRow.tsx`; `AdminDashboard.tsx` and
+    `RegistrationRequests.tsx` rewritten from placeholders; `Header.tsx`
+    now shows a "Dashboard" link for any connected wallet and an "Admin"
+    link that's fully hidden (not just disabled) for non-admin wallets —
+    `RoleGuard` is still the real enforcement if someone navigates there
+    directly.
+
+    **Verified in-sandbox (frontend):** `tsc -b --noEmit` ✅, `eslint .`
+    ✅, `npx vitest run` ✅ **62/62 tests** across 16 files, `npx vite
+    build` ✅. **Verified in-sandbox (backend):** `tsc -b --noEmit` ✅,
+    `eslint src/modules/admin src/modules/auth test/admin` ✅, `npx
+    vitest run test/middleware/ test/wallet/ test/env.test.ts` ✅ 30/30
+    unchanged (confirms the `auth.roles.middleware.ts` refactor didn't
+    break module loading). Full Mongo-backed backend suite (including the
+    new `GET /admin/me/role` tests and the security-fix regression test,
+    both added to `test/admin/admin.test.ts`) still needs the user's real
+    `pnpm --filter backend test` run — same outstanding item as
+    #10-#12.
+
+    **Not done, called out explicitly:** `CreateElection` is still a
+    placeholder — deferred to its own slice, since it needs an on-chain
+    election-linking flow bigger than this one. `Landing`/`ElectionDetail`
+    were not revisited to reflect an admin's registration approval
+    becoming visible faster — that's already covered by existing
+    query-invalidation (`useConfirmRegistration` invalidates
+    `registration-status`/`my-elections` on confirm), just noting no new
+    UI was added there.
+14. **Create Election wizard slice is DONE and verified** (2026-07-14
+    session) — the last of the 7 Section 9 pages, and the biggest single
+    slice this project: a resumable multi-step admin wizard (draft →
+    on-chain `createElection()` → link → per-candidate `addCandidate()`,
+    each with an optional IPFS image upload) plus an "in progress" list
+    on Admin Dashboard so a wizard abandoned partway through is actually
+    reachable again, not just theoretically resumable.
+
+    **User's approved call: resumability, not single-sitting-only.** The
+    wizard's current step is derived entirely from the fetched draft's
+    own state (`electionId === null` vs set, `candidateCount` vs
+    `MIN_CANDIDATES_FOR_COMPLETE`) — there is no separate "wizard
+    progress" field anywhere that could drift out of sync with reality.
+    `MIN_CANDIDATES_FOR_COMPLETE = 2` is a frontend-only UX guard (no
+    such minimum exists anywhere in the codebase before this session,
+    confirmed by search) — the contract itself has no minimum candidate
+    count.
+
+    **How the two new on-chain values get read back**: `createElection()`
+    returns the new `electionId` as a function return value, and
+    `addCandidate()` similarly returns `candidateId` — neither is
+    observable from a transaction receipt on the frontend, only emitted
+    event LOGS are. `useCreateElectionOnChain.ts`/`useAddCandidate.ts`
+    both decode `ElectionCreated`/`CandidateAdded` from the receipt's
+    logs instead (same principle the worker's own `eventSync.ts` already
+    relies on for reading chain state, just wallet-side here).
+
+    **`useConfirmRegistration`'s "separate action, not one button"
+    principle repeats here**: approving a registration is free, so is
+    creating an off-chain draft; `createElection()` and each
+    `addCandidate()` call cost real gas. The wizard never hides that a
+    step is a transaction behind a label that makes it look like a form
+    save.
+
+    **A real ESLint/tooling incompatibility was found and fixed, not
+    worked around with a broken suppression**: `eslint-plugin-
+    react-hooks@4.6.2` crashes outright (`context.getSource is not a
+    function`) when resolving an `eslint-disable-next-line
+    react-hooks/exhaustive-deps` comment under ESLint 9's newer internal
+    API — a known upstream version incompatibility, not a bug in this
+    codebase. Rather than leaving a crashing suppression in place, both
+    `LinkStep.tsx` and `CandidatesStep.tsx`'s "act once when a
+    transaction confirms" effects were restructured with a `useRef`
+    guard that genuinely satisfies `exhaustive-deps` — which is also a
+    real correctness improvement, not just a lint workaround: the guard
+    makes the once-per-confirmation logic idempotent regardless of
+    whether `refetch`/mutation-object identity is stable across renders,
+    where the old suppressed version was implicitly assuming it wasn't
+    called twice.
+
+    **New backend?** None — this slice is 100% frontend, reusing
+    `POST /elections/draft`, `PATCH /elections/draft/:id/link-onchain`,
+    `GET /elections` (via the existing `useAdminElections.ts`, which
+    deliberately does NOT filter drafts the way `useElections.ts` does
+    for the public Landing page — two hooks, two different audiences,
+    same underlying endpoint), and `POST /ipfs/upload`, all already
+    built and role-gated.
+
+    **New frontend pieces:** `frontend/src/hooks/useCreateDraft.ts`,
+    `useCreateElectionOnChain.ts`, `useLinkOnChain.ts`,
+    `useAddCandidate.ts`, `useUploadImage.ts` (bypasses `apiClient.ts`'s
+    JSON-only helper for multipart form data, keeping the same
+    `credentials:"include"`/`ApiError` contract), `useSetCandidateProfile.ts`,
+    `useAdminElections.ts`; `frontend/src/components/create-election/
+    DetailsStep.tsx` (+ test), `LinkStep.tsx`, `CandidatesStep.tsx`;
+    `CreateElection.tsx` rewritten as the resumable orchestrator (+
+    test); `AdminDashboard.tsx` gets its "in progress" section (+ test);
+    `router.tsx` gets the new `/admin/elections/:id/continue` route.
+
+    **Verified in-sandbox:** `tsc -b --noEmit` ✅, `eslint .` ✅ (after
+    the ESLint-crash fix above), `npx vitest run` ✅ **79/79 tests**
+    across 20 files, `npx vite build` ✅.
+
+    **Not done, called out explicitly:** `LinkStep.tsx`/
+    `CandidatesStep.tsx`'s own wagmi-`writeContract`/receipt-decoding
+    internals are NOT covered by dedicated tests — `CreateElection.test.tsx`
+    deliberately stubs both components out to isolate the orchestrator's
+    step-selection branching (the part with real correctness risk: wrong
+    step shown = wrong data lost), not because their internals don't
+    matter. Testing `useWriteContract`/`useWaitForTransactionReceipt`'s
+    full state-transition surface plus event-log decoding would need
+    substantially heavier wagmi mocking than this session's other write
+    hooks (`useCastVote.ts`, `useConfirmRegistration.ts`) needed, since
+    those never had dedicated tests either — this is a consistent gap
+    across every on-chain write hook in this app, not new to this slice,
+    worth a dedicated testing pass if it becomes a priority. This
+    project's only Election with real content will need to go through
+    this actual wizard by hand (`pnpm --filter @dvs/frontend dev`) to be
+    fully confident in it beyond what static analysis can confirm.
+15. **Results/Archive page is DONE and verified** (2026-07-15 session) —
+    the last of the 7 Section 9 pages. Reuses `useElections()` (filtered
+    client-side to `result_finalized`) and a new
+    `frontend/src/components/ArchiveElectionCard.tsx` (composes the
+    already-built `ElectionStateStrip`/`ResultsBar`) — no new backend
+    surface at all. Scope decision: full results shown inline for every
+    finalized election rather than card-only links out, matching
+    Landing's own "verifiable at a glance" hero copy.
+
+    **Self-caused incident, recorded honestly:** mid-way through this
+    slice, a prior message asked to re-confirm an unrelated file
+    delivery; answering that took priority for one turn, and the
+    in-progress `ResultsArchive.tsx` rewrite was left **mid-delete** —
+    the old placeholder had already been removed but the replacement
+    hadn't been written yet, leaving `router.tsx`'s import genuinely
+    broken (would have failed `vite build`) until the user's own
+    screenshot of the still-placeholder page prompted a check that caught
+    it. The zip delivered earlier in that same session was NOT affected
+    (it was built before the deletion), but the live working copy was
+    briefly in a broken state with no test run to catch it, since no
+    verification was run between the deletion and the fix. Lesson worth
+    keeping in mind for future multi-step file rewrites in this
+    project: don't let an unrelated request interleave with a
+    delete-then-recreate step without finishing it first, or at minimum
+    re-run `tsc -b`/`vite build` before considering the working copy
+    stable again.
+
+    **Verified in-sandbox:** `tsc -b --noEmit` ✅ (this is what would
+    have caught the broken import, had it been run at the time — it
+    wasn't, until this fix), `eslint .` ✅, `npx vitest run` ✅
+    **85/85 tests** across 22 files, `npx vite build` ✅ (this
+    specifically re-confirms the previously-broken `router.tsx` import
+    now resolves).
+
+    **All 7 Section 9 pages now have real content.** Remaining known
+    gaps across the whole Phase 4 effort: on-chain write hooks lack
+    dedicated tests (see item 14's note, applies here too — this slice
+    added no new write hooks, so nothing new on that front); Sepolia
+    deployment is still deferred (item 4); `contracts/scripts` still
+    doesn't read `shared/contract-addresses.json` (item 6's original
+    gap, still open).
 
 ## Files worth knowing about at repo root
 - `PHASE2_STATUS.md`, `PHASE3_MANIFEST.md` — prior session status notes,

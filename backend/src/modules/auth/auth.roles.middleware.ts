@@ -41,6 +41,22 @@ import type { NextFunction, Request, Response } from "express";
 import { HttpError } from "../../shared/httpError.js";
 import { getElectionContractClient, getVoterRegistryContractClient } from "../blockchain/index.js";
 
+/**
+ * The actual OR-across-both-contracts check (see this file's header
+ * comment for why OR, not AND). Extracted so it has exactly one
+ * implementation: `requireRoleMiddleware` below (enforcement, throws on
+ * failure) and `GET /admin/me/role` (admin.routes.ts — a plain read, for
+ * the frontend's RoleGuard to decide what to render) both call this
+ * rather than each re-implementing the Promise.all/OR logic separately.
+ */
+export async function checkHasRoleOnEitherContract(role: `0x${string}`, account: `0x${string}`): Promise<boolean> {
+  const [hasRoleOnElection, hasRoleOnVoterRegistry] = await Promise.all([
+    getElectionContractClient().hasRole(role, account),
+    getVoterRegistryContractClient().hasRole(role, account),
+  ]);
+  return hasRoleOnElection || hasRoleOnVoterRegistry;
+}
+
 export function requireRole(role: `0x${string}`) {
   return async function requireRoleMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -53,13 +69,7 @@ export function requireRole(role: `0x${string}`) {
       }
       const account = auth.address as `0x${string}`;
 
-      const [hasRoleOnElection, hasRoleOnVoterRegistry] = await Promise.all([
-        getElectionContractClient().hasRole(role, account),
-        getVoterRegistryContractClient().hasRole(role, account),
-      ]);
-
-      // OR semantics: allow if role is held on at least one contract
-      const hasRoleOnEitherContract = hasRoleOnElection || hasRoleOnVoterRegistry;
+      const hasRoleOnEitherContract = await checkHasRoleOnEitherContract(role, account);
       if (!hasRoleOnEitherContract) {
         throw new HttpError(
           403,
