@@ -58,7 +58,8 @@ export function ElectionDetail(): JSX.Element {
     );
   }
 
-  const resultsVisible = election.state === "voting_ended" || election.state === "result_finalized";
+  const resultsVisible =
+    election.state === "voting_ended" || election.state === "result_finalized" || election.state === "archived";
 
   return (
     <div className="flex flex-col gap-8">
@@ -124,7 +125,7 @@ export function ElectionDetail(): JSX.Element {
         </section>
       )}
 
-      {election.state === "voting_scheduled" && !isConnected && (
+      {(election.state === "registration_open" || election.state === "registration_closed") && !isConnected && (
         <p className="text-sm text-muted">Voting hasn't started yet — connect a wallet to be ready when it does.</p>
       )}
 

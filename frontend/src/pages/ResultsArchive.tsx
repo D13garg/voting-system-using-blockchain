@@ -25,7 +25,12 @@ function LoadingState(): JSX.Element {
 
 export function ResultsArchive(): JSX.Element {
   const { data: elections, isLoading, isError, refetch } = useElections();
-  const finalized = elections?.filter((election) => election.state === "result_finalized") ?? [];
+  // Both result_finalized and archived belong here - this page IS the
+  // "Archive" / "Past Elections" view architecture Section 16's table
+  // calls for once an election reaches Archived, and a freshly-finalized
+  // election shouldn't vanish from it while waiting for that later,
+  // separate admin action.
+  const finalized = elections?.filter((election) => election.state === "result_finalized" || election.state === "archived") ?? [];
 
   return (
     <div>

@@ -1,6 +1,6 @@
 // Etherscan verification script. Run after deploy:sepolia, once
-// shared/contract-addresses.json has been populated for the "sepolia"
-// network entry.
+// shared/contract-addresses.json has been populated for Sepolia's chainId
+// (11155111) entry.
 //
 // Public verification matters here specifically because the architecture's
 // core claim is independent verifiability (Section 14, step 9: "Verifying
@@ -8,7 +8,7 @@
 // An unverified contract on Etherscan only shows bytecode, not readable
 // source - verification is what actually makes that claim true in
 // practice, not just in principle.
-import { run, network } from "hardhat";
+import { run, network, ethers } from "hardhat";
 import * as fs from "fs";
 import * as path from "path";
 import { readContractAddresses } from "./contractAddresses";
@@ -23,11 +23,14 @@ async function main(): Promise<void> {
   }
 
   const addresses = readContractAddresses(ADDRESSES_FILE);
-  const networkEntry = addresses[network.name];
+  // Keyed by chainId, not network.name - see contractAddresses.ts's header
+  // comment and deploy.ts's matching write for why.
+  const chainId = (await ethers.provider.getNetwork()).chainId;
+  const networkEntry = addresses[String(chainId)];
 
   if (!networkEntry) {
     throw new Error(
-      `No deployment recorded for network "${network.name}" in ${ADDRESSES_FILE}. Deploy first.`,
+      `No deployment recorded for chain ${chainId} (network "${network.name}") in ${ADDRESSES_FILE}. Deploy first.`,
     );
   }
 

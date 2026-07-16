@@ -20,6 +20,19 @@ function mockElections(overrides: Partial<ReturnType<typeof useElectionsModule.u
   } as ReturnType<typeof useElectionsModule.useElections>);
 }
 
+function makeElection(overrides: Partial<ElectionSummary> & Pick<ElectionSummary, "id" | "electionId" | "title" | "state">): ElectionSummary {
+  return {
+    description: "",
+    createdBy: "0x1",
+    createdAt: "2026-01-01",
+    registrationClosedAt: null,
+    registrationClosedBy: null,
+    archivedAt: null,
+    archivedBy: null,
+    ...overrides,
+  };
+}
+
 describe("ResultsArchive", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -44,21 +57,23 @@ describe("ResultsArchive", () => {
 
   it("shows an empty state when nothing is finalized", () => {
     const elections: ElectionSummary[] = [
-      { id: "1", electionId: 1, title: "Still active", description: "", state: "voting_active", createdBy: "0x1", createdAt: "2026-01-01" },
+      makeElection({ id: "1", electionId: 1, title: "Still active", state: "voting_active" }),
     ];
     mockElections({ data: elections });
     renderArchive();
     expect(screen.getByText(/No elections have been finalized/)).toBeInTheDocument();
   });
 
-  it("shows only result_finalized elections, filtering out other states", () => {
+  it("shows result_finalized and archived elections, filtering out other states", () => {
     const elections: ElectionSummary[] = [
-      { id: "1", electionId: 1, title: "Active one", description: "", state: "voting_active", createdBy: "0x1", createdAt: "2026-01-01" },
-      { id: "2", electionId: 2, title: "Finalized one", description: "", state: "result_finalized", createdBy: "0x1", createdAt: "2026-01-01" },
+      makeElection({ id: "1", electionId: 1, title: "Active one", state: "voting_active" }),
+      makeElection({ id: "2", electionId: 2, title: "Finalized one", state: "result_finalized" }),
+      makeElection({ id: "3", electionId: 3, title: "Archived one", state: "archived" }),
     ];
     mockElections({ data: elections });
     renderArchive();
     expect(screen.getByText("Finalized one")).toBeInTheDocument();
+    expect(screen.getByText("Archived one")).toBeInTheDocument();
     expect(screen.queryByText("Active one")).not.toBeInTheDocument();
   });
 });

@@ -44,9 +44,47 @@ describe("AdminDashboard", () => {
   it("lists in-progress elections with the right status label", () => {
     mockPending(0);
     mockAdminElections([
-      { id: "a", electionId: null, title: "Draft election", description: "", state: "draft", createdBy: "0x1", createdAt: "2026-01-01" },
-      { id: "b", electionId: 2, title: "Needs candidates", description: "", state: "voting_scheduled", createdBy: "0x1", createdAt: "2026-01-01", candidateCount: 1 },
-      { id: "c", electionId: 3, title: "Already complete", description: "", state: "voting_scheduled", createdBy: "0x1", createdAt: "2026-01-01", candidateCount: 2 },
+      {
+        id: "a",
+        electionId: null,
+        title: "Draft election",
+        description: "",
+        state: "draft",
+        createdBy: "0x1",
+        createdAt: "2026-01-01",
+        registrationClosedAt: null,
+        registrationClosedBy: null,
+        archivedAt: null,
+        archivedBy: null,
+      },
+      {
+        id: "b",
+        electionId: 2,
+        title: "Needs candidates",
+        description: "",
+        state: "registration_open",
+        createdBy: "0x1",
+        createdAt: "2026-01-01",
+        candidateCount: 1,
+        registrationClosedAt: null,
+        registrationClosedBy: null,
+        archivedAt: null,
+        archivedBy: null,
+      },
+      {
+        id: "c",
+        electionId: 3,
+        title: "Already complete",
+        description: "",
+        state: "registration_open",
+        createdBy: "0x1",
+        createdAt: "2026-01-01",
+        candidateCount: 2,
+        registrationClosedAt: null,
+        registrationClosedBy: null,
+        archivedAt: null,
+        archivedBy: null,
+      },
     ]);
     renderDashboard();
 

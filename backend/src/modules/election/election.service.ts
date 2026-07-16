@@ -41,6 +41,24 @@
 // Mongo, so a non-admin caller could hijack ANY draft (including one
 // created by a real admin) onto an arbitrary already-confirmed
 // electionId with no contract-level check ever standing in the way.
+//
+// LIFECYCLE STATE: closeRegistration/archiveElection below close the gap
+// election.types.ts used to flag (ElectionLifecycleState only having 5 of
+// Section 16's 8 values) - see that file's header comment for the full
+// model.
+//
+// NOT DONE, ON PURPOSE: admin.service.ts's submitRegistrationRequest does
+// not check registration_open before accepting a request, even though
+// Section 16's table describes that as Registration Closed's backend
+// responsibility. listElections/getElectionById above only ever iterate
+// ElectionMetadataModel (this backend's own Mongo drafts) - an election
+// that exists purely on-chain / via the IndexedElection mirror without a
+// corresponding draft (electionId's own doc comment on this) is
+// invisible to them. Gating registration on a listElections() lookup
+// would silently block real voter registration for exactly that case,
+// which VoterRegistry itself has no problem with. Enforcing this
+// correctly needs its own source of truth, not a shortcut through this
+// module - left as an explicitly open item rather than a quiet gap.
 
 import { HttpError } from "../../shared/httpError.js";
 import { BlockchainError, RECOMMENDED_POLL_INTERVAL_MS } from "../blockchain/index.js";
@@ -93,14 +111,43 @@ function toView(onChain: ElectionData): OnChainElectionView {
  */
 const MIRROR_SYNC_GRACE_MS = RECOMMENDED_POLL_INTERVAL_MS * 2;
 
-function computeLifecycleState(onChain: OnChainElectionView | undefined, now: Date): ElectionLifecycleState {
+/**
+ * Lifecycle state derivation - see election.types.ts's header comment for
+ * the full reasoning behind the 7-state model (folding "voting_scheduled"
+ * into "registration_closed", and why Registration Closed/Archived are
+ * explicit admin actions rather than automatic).
+ *
+ * PRECEDENCE, evaluated top to bottom:
+ *  1. No on-chain link yet -> "draft".
+ *  2. Explicitly archived -> "archived" (archiveElection only allows this
+ *     once already result_finalized, so this implicitly also means
+ *     finalized - checked first here purely so archived elections don't
+ *     ever flicker back to "result_finalized" if this function were ever
+ *     called with slightly stale onChain data).
+ *  3. finalized flag set on-chain -> "result_finalized".
+ *  4. now >= endTime -> "voting_ended".
+ *  5. now >= startTime -> "voting_active". This is checked BEFORE the
+ *     registrationClosedAt check below - that's the startTime safety net:
+ *     even if an admin never explicitly closed registration, the moment
+ *     voting actually starts, the displayed state always reflects that
+ *     reality rather than staying stuck on "registration_open".
+ *  6. now < startTime, registrationClosedAt set -> "registration_closed".
+ *  7. now < startTime, registrationClosedAt unset -> "registration_open".
+ */
+function computeLifecycleState(
+  onChain: OnChainElectionView | undefined,
+  now: Date,
+  registrationClosedAt: Date | null,
+  archivedAt: Date | null,
+): ElectionLifecycleState {
   if (!onChain) return "draft";
+  if (archivedAt) return "archived";
   if (onChain.finalized) return "result_finalized";
 
   const nowSeconds = BigInt(Math.floor(now.getTime() / 1000));
-  if (nowSeconds < onChain.startTime) return "voting_scheduled";
-  if (nowSeconds < onChain.endTime) return "voting_active";
-  return "voting_ended";
+  if (nowSeconds >= onChain.endTime) return "voting_ended";
+  if (nowSeconds >= onChain.startTime) return "voting_active";
+  return registrationClosedAt ? "registration_closed" : "registration_open";
 }
 
 function toSummary(doc: ElectionMetadataDocument, onChain: OnChainElectionView | undefined, now: Date): ElectionSummary {
@@ -109,9 +156,13 @@ function toSummary(doc: ElectionMetadataDocument, onChain: OnChainElectionView |
     electionId: doc.electionId,
     title: onChain?.title ?? doc.title,
     description: doc.description,
-    state: computeLifecycleState(onChain, now),
+    state: computeLifecycleState(onChain, now, doc.registrationClosedAt, doc.archivedAt),
     createdBy: doc.createdBy,
     createdAt: doc.createdAt.toISOString(),
+    registrationClosedAt: doc.registrationClosedAt ? doc.registrationClosedAt.toISOString() : null,
+    registrationClosedBy: doc.registrationClosedBy,
+    archivedAt: doc.archivedAt ? doc.archivedAt.toISOString() : null,
+    archivedBy: doc.archivedBy,
     ...(onChain && {
       startTime: new Date(Number(onChain.startTime) * 1000).toISOString(),
       endTime: new Date(Number(onChain.endTime) * 1000).toISOString(),
@@ -265,4 +316,74 @@ export async function linkOnChainElection(
   await doc.save();
 
   return toSummary(doc, toView(onChain), new Date());
+}
+
+export interface CloseRegistrationInput {
+  draftId: string;
+  closedBy: string;
+}
+
+/**
+ * Explicit admin action: Registration Open -> Registration Closed (Section
+ * 16). Only valid from registration_open - see computeLifecycleState's
+ * header comment for why there's no separate on-chain step here (nothing
+ * to wait on/validate against, unlike linkOnChainElection).
+ */
+export async function closeRegistration(input: CloseRegistrationInput): Promise<ElectionSummary> {
+  const doc = await ElectionMetadataModel.findById(input.draftId);
+  if (!doc) {
+    throw new HttpError(404, "ELECTION_NOT_FOUND", `No election found with id ${input.draftId}.`);
+  }
+
+  const onChain = await fetchMirroredElection(doc);
+  const now = new Date();
+  const currentState = computeLifecycleState(onChain, now, doc.registrationClosedAt, doc.archivedAt);
+  if (currentState !== "registration_open") {
+    throw new HttpError(
+      409,
+      "ELECTION_NOT_REGISTRATION_OPEN",
+      `Election ${input.draftId} is in state "${currentState}", not "registration_open" - registration can only be closed from that state.`,
+    );
+  }
+
+  doc.registrationClosedAt = now;
+  doc.registrationClosedBy = input.closedBy;
+  await doc.save();
+
+  return toSummary(doc, onChain, now);
+}
+
+export interface ArchiveElectionInput {
+  draftId: string;
+  archivedBy: string;
+}
+
+/**
+ * Explicit admin action: Result Finalized -> Archived (Section 16),
+ * mirroring finalizeElection()'s explicit-step pattern (ADR-006) rather
+ * than an automatic time-based policy - see election.types.ts's header
+ * comment for why. Only valid from result_finalized.
+ */
+export async function archiveElection(input: ArchiveElectionInput): Promise<ElectionSummary> {
+  const doc = await ElectionMetadataModel.findById(input.draftId);
+  if (!doc) {
+    throw new HttpError(404, "ELECTION_NOT_FOUND", `No election found with id ${input.draftId}.`);
+  }
+
+  const onChain = await fetchMirroredElection(doc);
+  const now = new Date();
+  const currentState = computeLifecycleState(onChain, now, doc.registrationClosedAt, doc.archivedAt);
+  if (currentState !== "result_finalized") {
+    throw new HttpError(
+      409,
+      "ELECTION_NOT_FINALIZED",
+      `Election ${input.draftId} is in state "${currentState}", not "result_finalized" - only a finalized election can be archived.`,
+    );
+  }
+
+  doc.archivedAt = now;
+  doc.archivedBy = input.archivedBy;
+  await doc.save();
+
+  return toSummary(doc, onChain, now);
 }

@@ -4,22 +4,22 @@
 // Election Detail page later). See HANDOFF.md's Phase 4 section for the
 // full design-decision record.
 //
-// SCOPE: only 4 steps, not architecture.md Section 16's full 8-state
-// model — Registration Open/Closed and Archived aren't in
-// ElectionLifecycleState yet (election.types.ts's own comment: they
-// depend on the not-yet-built Admin registration workflow and an
-// undefined archiving policy). "draft" isn't shown as a step either;
-// this component is never rendered for a draft (useElections.ts filters
-// those out before they reach here) — a strip with only one lit node
-// would be a strange, sad first impression. Revisit this component's
-// step list when those backend gaps close, not before.
+// SCOPE: 6 steps - all of architecture.md Section 16's 8-state model
+// except "draft" and "voting_scheduled" (see election.types.ts's header
+// comment on the backend for why voting_scheduled is folded into
+// registration_closed rather than kept separate). "draft" isn't shown as
+// a step either; this component is never rendered for a draft
+// (useElections.ts filters those out before they reach here) — a strip
+// with only one lit node would be a strange, sad first impression.
 import type { ElectionLifecycleState } from "../hooks/useElections.js";
 
 const STEPS: { state: ElectionLifecycleState; label: string }[] = [
-  { state: "voting_scheduled", label: "Scheduled" },
+  { state: "registration_open", label: "Registration" },
+  { state: "registration_closed", label: "Scheduled" },
   { state: "voting_active", label: "Active" },
   { state: "voting_ended", label: "Ended" },
   { state: "result_finalized", label: "Finalized" },
+  { state: "archived", label: "Archived" },
 ];
 
 const STEP_INDEX: Record<string, number> = Object.fromEntries(STEPS.map((s, i) => [s.state, i]));
@@ -36,14 +36,14 @@ export function ElectionStateStrip({ state }: ElectionStateStripProps): JSX.Elem
       {STEPS.map((step, index) => {
         const isComplete = index < currentIndex;
         const isCurrent = index === currentIndex;
-        // Finalized is the only step that means "confirmed, done" —
-        // everywhere else, emerald must not appear (the scaffold's own
-        // rule: confirmed color is reserved for on-chain-confirmed
-        // state). A completed-but-not-finalized step (e.g. "Scheduled"
-        // once voting is Active) is shown as ink, not emerald — it
-        // happened, but it isn't itself a confirmation.
+        // Finalized and Archived are the only steps that mean "confirmed,
+        // done" — everywhere else, emerald must not appear (the
+        // scaffold's own rule: confirmed color is reserved for
+        // on-chain-confirmed state). A completed-but-not-finalized step
+        // (e.g. "Scheduled" once voting is Active) is shown as ink, not
+        // emerald — it happened, but it isn't itself a confirmation.
         const nodeState =
-          step.state === "result_finalized" && (isComplete || isCurrent)
+          (step.state === "result_finalized" || step.state === "archived") && (isComplete || isCurrent)
             ? "confirmed"
             : isCurrent
               ? "current"

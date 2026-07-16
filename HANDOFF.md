@@ -1359,3 +1359,153 @@ diagram is sourced from. **All 5 pre-frontend items are now closed.**
 - `.github/workflows/ci.yml` — item 3's CI pipeline. DONE and CONFIRMED
   by a real green run this session (2026-07-12); see item 3's entry
   above for what changed from the original in-sandbox draft and why.
+
+16. **CI fully green + lifecycle-state gap closed + one-command Docker
+    dev stack** (2026-07-16 session).
+
+    **CI fixes:** `adminMyElections.test.ts`'s `GET /voters/me/elections`
+    suite was failing 500s because `voting.service.ts`'s `hasVoted()` did
+    a live `getElection()` existence check even when the caller
+    (`admin.service.ts`'s `getMyElectionStatuses`) already knew the
+    election existed from its own `listElections()` read — added an
+    opt-in `skipExistenceCheck` param rather than removing the check
+    outright (`voting.routes.ts`'s direct usage still needs it). Same
+    suite also had a seeded `IndexedVoterRegistrationModel` doc missing
+    required `lastEventBlockNumber`/`lastEventLogIndex` fields (a test
+    bug, fixed to match the seeding convention already used elsewhere).
+    Separately, the frontend CI build was failing `TS2307` on
+    `shared/contract-addresses.json` — that file is gitignored (local
+    deploy output), so a fresh CI checkout never has it; added a CI step
+    writing a placeholder `{}` before Build, since an empty config is
+    already a valid, handled runtime state.
+
+    **`contracts/scripts` ↔ `shared/contract-addresses.json` key
+    mismatch — investigated, fixed, then REVERTED at the user's request.**
+    Found a real bug while chasing item 6's gap: `deploy.ts`/`verify.ts`
+    keyed the file by Hardhat's `network.name` ("localhost"/"sepolia"),
+    but the frontend has always looked entries up by `String(chainId)` -
+    so even a real deploy would never have been visible to the frontend.
+    Fixed it (reworked `contractAddresses.ts`'s shared type/validator,
+    `deploy.ts`'s write, `verify.ts`'s read), verified clean
+    (`tsc`/`eslint`/simulated round-trip/frontend build against the new
+    shape) - then the user asked to undo it, and it was reverted to
+    exactly its prior state. Item 6's gap is therefore back to OPEN,
+    with the mismatch now at least documented here for whoever picks it
+    up next.
+
+    **Lifecycle-state gap CLOSED** (the "5 of 8 states" gap items 4/6's
+    entries above and `election.types.ts`'s own header comment used to
+    flag). Two decision forks, both resolved as explicit admin actions
+    by the user: Registration Open → Registration Closed (new
+    `PATCH /elections/draft/:id/close-registration`, with an automatic
+    safety net — the state display can never get stuck on
+    "registration_open" past `startTime` even if the admin forgets to
+    close it, since `computeLifecycleState` checks `now >= startTime`
+    before checking `registrationClosedAt` at all) and Result Finalized
+    → Archived (new `PATCH /elections/draft/:id/archive`, mirroring
+    `finalizeElection()`'s explicit-step pattern per ADR-006). One
+    design call made along the way, not separately asked: `"voting_scheduled"`
+    is retired as its own enum value rather than kept alongside
+    `"registration_closed"` — `createElection()` sets `startTime` and
+    `endTime` together in one call, so there's no on-chain moment that
+    splits "registration just closed" from "still waiting for start" as
+    two procedurally different windows, and Section 16's own table gives
+    them no distinct backend responsibility. `ElectionLifecycleState` is
+    now `draft | registration_open | registration_closed | voting_active
+    | voting_ended | result_finalized | archived` (7 of 8 - "draft"
+    itself was always outside Section 16's numbered states). Frontend
+    updated to match: `ElectionStateStrip` now has 6 steps,
+    `Landing`'s single "Upcoming" section split into "Registration open"
+    / "Starting soon", `ResultsArchive` now includes `archived` alongside
+    `result_finalized` (results stay visible after archiving).
+
+    **Deliberately NOT done:** `admin.service.ts`'s
+    `submitRegistrationRequest` still doesn't reject requests once
+    registration is closed, even though Section 16's table describes
+    that as Registration Closed's backend responsibility. Started to
+    wire it via `listElections()`, caught that `listElections()` only
+    ever iterates `ElectionMetadataModel` (this backend's own Mongo
+    drafts) - an election that exists purely on-chain without a draft is
+    invisible to it, so gating registration on that lookup would
+    silently break real voter registration for exactly that case, which
+    VoterRegistry itself has no problem with. Left as an explicitly open
+    item (own comment in `election.service.ts`'s header) rather than a
+    quiet gap or a rushed wrong fix.
+
+    **Verified in-sandbox:** backend `tsc --noEmit` ✅, `eslint
+    src/modules/election test/election` ✅ (0 errors, pre-existing
+    `createDraft` debug-`console.log` warnings only, not from this
+    session — worth a cleanup pass sometime, not touched here to stay
+    scoped). Frontend `tsc -b` ✅, `eslint src` ✅, `npx vitest run` ✅
+    **84/86** (2 failures were this session's own throwaway local
+    `contract-addresses.json` placeholder, not a real regression - fixed
+    by deleting that file, which is gitignored and not part of any
+    deliverable anyway). Could not run the backend's own Mongo-backed
+    suite in-sandbox (`MongoMemoryServer` needs a binary download,
+    blocked by the sandbox's network allowlist - same documented
+    limitation as always); traced the new `election.test.ts` cases by
+    hand instead. Real `pnpm --filter backend test` run still needed from
+    the user - same outstanding item as #10-#12, #14.
+
+    **One-command Docker dev stack**, at the user's request ("use docker
+    to run the entire system using a single command instead of multiple
+    terminals"). `pnpm dev` (→ `dev.sh`) now brings up a local Hardhat
+    chain with contracts auto-deployed on start, MongoDB, Redis, and
+    hot-reloading API/worker containers, then starts the frontend dev
+    server natively alongside them. Deliberately layered as an OVERLAY
+    (`docker-compose.dev.yml`) on the existing `docker-compose.yml`
+    rather than editing it in place, so the original production-style
+    api/worker images stay exactly as designed - only services with real
+    dev-specific differences (`chain`, plus `api`/`worker`'s dev CMD and
+    hot-reload volume mounts) appear in the overlay; `mongodb`/`redis`
+    aren't redeclared at all. The frontend deliberately stays OUTSIDE
+    Docker even here, per `docker-compose.yml`'s own existing rationale
+    (Vite HMR) - `dev.sh` runs it natively alongside the Docker stack
+    instead of asking that decision to be reversed.
+
+    The `chain` service runs `hardhat node` and `deploy.ts` in the same
+    container/process, in that order, rather than a separate one-shot
+    deploy container - `hardhat.config.ts`'s `localhost` network is
+    hardcoded to `http://127.0.0.1:8545`, which only resolves to "this
+    same container" from inside it, not across containers, and changing
+    that hardcoded URL wasn't in scope for a dev-convenience layer.
+    Redeploys on every container start rather than checking for an
+    existing address entry first - deliberate, not sloppy: the chain's
+    state is in-memory and resets every restart anyway, so a stale
+    entry would point at contracts that no longer exist on that fresh
+    chain, and redeploying against Hardhat's deterministic test accounts
+    reproduces the same addresses every time regardless.
+
+    The backend's `env.ts`-validated env-var contract (`CONTRACT_ADDRESS_VOTER_REGISTRY`/`CONTRACT_ADDRESS_ELECTION`
+    as plain required env vars, never read from
+    `shared/contract-addresses.json` directly - confirmed true again
+    this session) is left untouched; a `docker/wait-for-contracts.sh`
+    entrypoint shim bridges the JSON file into those env vars before the
+    real `pnpm run dev:api`/`dev:worker` command starts, layered as
+    defense in depth alongside the `chain` service's
+    healthcheck-gated `depends_on` (which only guards the *initial*
+    container start - a later lone `docker compose restart api` doesn't
+    re-wait on `depends_on` at all, so the shim still catches that case).
+
+    New env template `backend/.env.docker.example` (compose service
+    hostnames - `mongodb`, `redis`, `chain` - instead of `localhost`,
+    which inside a container means that container itself). Writing this
+    correctly surfaced that the existing `backend/.env.example` is
+    missing two fields `env.ts` actually requires with no default
+    (`FRONTEND_ORIGIN`, `RESEND_API_KEY`) - flagging this rather than
+    silently fixing the other file too, since that's a separate,
+    pre-existing staleness issue outside this task's scope.
+
+    **Verified in-sandbox:** JSON/YAML/shell/JS syntax validation on
+    every new file (`package.json`, both compose files, `dev.sh`,
+    `chain-entrypoint.sh`, `wait-for-contracts.sh`, `wait-for-chain.js`)
+    - all clean. Every file path, service hostname, and env var
+    referenced was checked against the real source (`hardhat.config.ts`,
+    `env.ts`, `contractAddresses.ts`, `deploy.ts`), not assumed.
+    **Could not actually run `docker compose up`** - no `docker` binary
+    in this sandbox at all (confirmed: `docker: not found`), a step
+    beyond even the MongoMemoryServer binary-download limitation seen
+    elsewhere in this project. This is the one part of this session's
+    work that's unverified beyond careful manual tracing - running
+    `pnpm dev` for real, end to end, on the user's own machine is the
+    single most important next step before trusting this.

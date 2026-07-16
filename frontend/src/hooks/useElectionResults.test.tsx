@@ -21,7 +21,7 @@ describe("useElectionResults", () => {
 
   it("does not fetch while voting hasn't started", () => {
     const spy = vi.spyOn(apiClient, "apiFetch");
-    renderHook(() => useElectionResults(7, "voting_scheduled"), { wrapper });
+    renderHook(() => useElectionResults(7, "registration_open"), { wrapper });
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -38,6 +38,14 @@ describe("useElectionResults", () => {
       .spyOn(apiClient, "apiFetch")
       .mockResolvedValue({ results: { electionId: 7, totalVotes: 0, candidates: [] } });
     renderHook(() => useElectionResults(7, "result_finalized"), { wrapper });
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("/elections/7/results"));
+  });
+
+  it("still fetches once archived - results shouldn't disappear after archiving", async () => {
+    const spy = vi
+      .spyOn(apiClient, "apiFetch")
+      .mockResolvedValue({ results: { electionId: 7, totalVotes: 0, candidates: [] } });
+    renderHook(() => useElectionResults(7, "archived"), { wrapper });
     await waitFor(() => expect(spy).toHaveBeenCalledWith("/elections/7/results"));
   });
 });

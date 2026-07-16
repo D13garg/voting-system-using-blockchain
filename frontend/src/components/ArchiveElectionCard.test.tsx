@@ -13,6 +13,10 @@ const election: ElectionSummary = {
   state: "result_finalized",
   createdBy: "0x1",
   createdAt: "2026-01-01",
+  registrationClosedAt: "2026-01-01",
+  registrationClosedBy: "0x1",
+  archivedAt: null,
+  archivedBy: null,
 };
 
 function render_(): ReturnType<typeof render> {

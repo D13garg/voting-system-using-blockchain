@@ -1,0 +1,90 @@
+# Local one-command dev stack. An OVERLAY on docker-compose.yml, not a
+# replacement - run both together:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# or just `pnpm dev` from the repo root, which does that plus starts the
+# frontend dev server alongside it (see dev.sh). mongodb/redis are
+# entirely unchanged from docker-compose.yml and deliberately not
+# redeclared here - only services with dev-specific differences appear
+# in this file, and Compose merges the two on service name.
+#
+# Adds a `chain` service (local Hardhat node, contracts auto-deployed on
+# start - see contracts/docker/chain-entrypoint.sh) and swaps api/worker
+# from docker-compose.yml's production-style compiled-dist images to
+# hot-reloading dev builds (backend/Dockerfile.dev).
+#
+# The frontend is still deliberately NOT containerized here - see
+# docker-compose.yml's own header comment for why (Vite HMR is
+# materially worse inside Docker, and there's no production-parity
+# reason to pay that cost locally). It runs natively, talking to this
+# stack over the same ports (localhost:4000 for the API, localhost:8545
+# for the chain, both published below and in docker-compose.yml).
+
+services:
+  chain:
+    build:
+      context: .
+      dockerfile: contracts/Dockerfile.dev
+    container_name: dvs-chain
+    ports:
+      - "8545:8545"
+    volumes:
+      # Bind-mounted, not copied at build time: deploy.ts writes
+      # shared/contract-addresses.json into this same host directory,
+      # which is exactly where the natively-running frontend already
+      # reads it from (frontend/src/lib/contractAddresses.ts's existing
+      # relative import) - no extra wiring needed for the frontend half
+      # of this loop.
+      - ./shared:/app/shared
+    healthcheck:
+      # Set by chain-entrypoint.sh only after the deploy step finishes -
+      # this is "contracts are deployed and ready", not merely "the node
+      # process is running".
+      test: ["CMD-SHELL", "test -f /tmp/chain-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+      start_period: 5s
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.dev
+    command: ["pnpm", "run", "dev:api"]
+    env_file:
+      - ./backend/.env.docker
+    environment:
+      RPC_URL_PRIMARY: http://chain:8545
+      RPC_URL_FALLBACK: http://chain:8545
+      CHAIN_ID: "31337"
+    volumes:
+      # Only the code that actually changes during iteration - NOT the
+      # whole ./backend directory, which would shadow the image's
+      # already-installed node_modules with whatever (or nothing) exists
+      # at that path on the host.
+      - ./backend/src:/app/backend/src
+      - ./backend/worker:/app/backend/worker
+      - ./shared:/app/shared
+    depends_on:
+      chain:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.dev
+    command: ["pnpm", "run", "dev:worker"]
+    env_file:
+      - ./backend/.env.docker
+    environment:
+      RPC_URL_PRIMARY: http://chain:8545
+      RPC_URL_FALLBACK: http://chain:8545
+      CHAIN_ID: "31337"
+    volumes:
+      - ./backend/src:/app/backend/src
+      - ./backend/worker:/app/backend/worker
+      - ./shared:/app/shared
+    depends_on:
+      chain:
+        condition: service_healthy

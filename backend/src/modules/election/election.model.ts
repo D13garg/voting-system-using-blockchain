@@ -24,6 +24,27 @@ export interface ElectionMetadataDocument extends mongoose.Document {
   electionId: number | null;
   /** The transaction hash of the createElection() call, recorded at link time for audit purposes. */
   linkTransactionHash: string | null;
+  /**
+   * Set by the explicit "Close Registration" admin action (election.service.ts's
+   * closeRegistration) - null means registration is still open. There is no
+   * on-chain signal for this (Election.sol's createElection() sets startTime
+   * AND endTime together; there's no separate on-chain registration-cutoff
+   * concept), so this off-chain timestamp is authoritative. See
+   * computeLifecycleState's header comment for how this interacts with
+   * startTime as a safety net.
+   */
+  registrationClosedAt: Date | null;
+  /** Wallet address of the admin who closed registration; null alongside registrationClosedAt until then. */
+  registrationClosedBy: string | null;
+  /**
+   * Set by the explicit "Archive" admin action (election.service.ts's
+   * archiveElection) - null means not archived. Mirrors finalizeElection()'s
+   * explicit-step pattern (ADR-006) rather than an automatic time-based
+   * policy, since no such policy is defined anywhere in the architecture doc.
+   */
+  archivedAt: Date | null;
+  /** Wallet address of the admin who archived the election; null alongside archivedAt until then. */
+  archivedBy: string | null;
   /** Wallet address of the admin who created this draft (off-chain audit trail, not an access-control check). */
   createdBy: string;
   createdAt: Date;
@@ -36,6 +57,10 @@ const electionMetadataSchema = new Schema<ElectionMetadataDocument>(
     description: { type: String, required: false, default: "" },
     electionId: { type: Number, default: null },
     linkTransactionHash: { type: String, default: null },
+    registrationClosedAt: { type: Date, default: null },
+    registrationClosedBy: { type: String, default: null },
+    archivedAt: { type: Date, default: null },
+    archivedBy: { type: String, default: null },
     createdBy: { type: String, required: true },
   },
   { timestamps: true },

@@ -16,7 +16,7 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 import { requireAuth } from "../auth/auth.middleware.js";
 import { requireRole } from "../auth/auth.roles.middleware.js";
 import { ELECTION_ADMINISTRATOR_ROLE, getElectionContractClient } from "../blockchain/index.js";
-import { createDraft, getElectionById, linkOnChainElection, listElections } from "./election.service.js";
+import { createDraft, getElectionById, linkOnChainElection, listElections, closeRegistration, archiveElection } from "./election.service.js";
 
 export const electionRouter = Router();
 
@@ -126,6 +126,60 @@ electionRouter.patch(
       { draftId: id, ...body },
       getElectionContractClient(),
     );
+    res.status(200).json({ election });
+  }),
+);
+
+/**
+ * @openapi
+ * /elections/draft/{id}/close-registration:
+ *   patch:
+ *     summary: Close registration for an election (Section 16's Registration Open -> Registration Closed), rejecting new registration requests from that point on
+ *     tags: [Election]
+ *     responses:
+ *       200:
+ *         description: Registration closed.
+ *       401:
+ *         description: Authentication required.
+ *       404:
+ *         description: Election not found.
+ *       409:
+ *         description: Election is not currently in the registration_open state.
+ */
+electionRouter.patch(
+  "/draft/:id/close-registration",
+  asyncHandler(requireAuth),
+  asyncHandler(requireRole(ELECTION_ADMINISTRATOR_ROLE)),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { id } = idParamSchema.parse(req.params);
+    const election = await closeRegistration({ draftId: id, closedBy: res.locals.auth!.address });
+    res.status(200).json({ election });
+  }),
+);
+
+/**
+ * @openapi
+ * /elections/draft/{id}/archive:
+ *   patch:
+ *     summary: Archive a finalized election (Section 16's Result Finalized -> Archived)
+ *     tags: [Election]
+ *     responses:
+ *       200:
+ *         description: Election archived.
+ *       401:
+ *         description: Authentication required.
+ *       404:
+ *         description: Election not found.
+ *       409:
+ *         description: Election is not currently in the result_finalized state.
+ */
+electionRouter.patch(
+  "/draft/:id/archive",
+  asyncHandler(requireAuth),
+  asyncHandler(requireRole(ELECTION_ADMINISTRATOR_ROLE)),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { id } = idParamSchema.parse(req.params);
+    const election = await archiveElection({ draftId: id, archivedBy: res.locals.auth!.address });
     res.status(200).json({ election });
   }),
 );

@@ -26,7 +26,7 @@ export interface ElectionResults {
   candidates: CandidateResult[];
 }
 
-const RESULTS_VISIBLE_STATES: ElectionLifecycleState[] = ["voting_ended", "result_finalized"];
+const RESULTS_VISIBLE_STATES: ElectionLifecycleState[] = ["voting_ended", "result_finalized", "archived"];
 
 export function useElectionResults(
   electionId: number | null | undefined,

@@ -65,10 +65,15 @@ async function main(): Promise<void> {
   );
 
   // --- Persist addresses for the backend (Blockchain Service Layer,
-  //     ADR-004) and frontend (Wagmi config) to consume. ---
+  //     ADR-004) and frontend (Wagmi config) to consume. Keyed by chainId,
+  //     not network.name - see contractAddresses.ts's header comment for
+  //     why (frontend/src/lib/contractAddresses.ts has always looked
+  //     entries up by chain ID). ---
   const addressesFile = readContractAddresses(ADDRESSES_FILE);
+  const chainIdKey = String(chainId);
 
-  addressesFile[network.name] = {
+  addressesFile[chainIdKey] = {
+    network: network.name,
     chainId: Number(chainId),
     voterRegistry: voterRegistryAddress,
     election: electionAddress,

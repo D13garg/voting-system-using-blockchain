@@ -60,24 +60,51 @@ for the full structure and rationale for every folder.
 
 - Node.js ≥ 20
 - pnpm ≥ 9 (`corepack enable` or `npm install -g pnpm`)
-- Docker + Docker Compose (for MongoDB + Redis locally)
+- Docker + Docker Compose
 
-## Setup
+## Running locally (recommended: one command)
 
 ```bash
 # Install all workspace dependencies
 pnpm install
 
 # Copy environment templates and fill in real values
-cp backend/.env.example backend/.env
+cp backend/.env.docker.example backend/.env.docker
+cp frontend/.env.example frontend/.env.local
 
-# Start MongoDB + Redis (and, once built, the API + worker containers)
-docker compose up -d mongodb redis
+# Chain, MongoDB, Redis, API, and worker, all together (Ctrl+C stops all of it)
+pnpm dev
 ```
 
-## Running locally
+`pnpm dev` brings up a local Hardhat chain with contracts already deployed
+against it, MongoDB, Redis, and hot-reloading API/worker containers, then
+starts the frontend dev server natively on the host alongside them — see
+[`dev.sh`](./dev.sh) and [`docker-compose.dev.yml`](./docker-compose.dev.yml)
+for exactly what that does and why the frontend stays outside Docker
+(Vite HMR). `pnpm dev:down` stops the Docker stack; `pnpm dev:reset` also
+wipes the MongoDB/Redis volumes for a clean slate.
+
+The frontend will be at http://localhost:5173, the API at
+http://localhost:4000, and the local chain's RPC at http://localhost:8545
+(point MetaMask at a "Localhost 8545" network, chain ID 31337, to interact
+with it directly).
+
+## Running locally (manual, multiple terminals)
+
+Useful for running just one piece in isolation, or against real
+Sepolia/hosted infrastructure instead of the local Docker stack.
 
 ```bash
+# Copy environment templates and fill in real values
+cp backend/.env.example backend/.env
+
+# Start MongoDB + Redis only
+docker compose up -d mongodb redis
+
+# Contracts: local Hardhat node + deploy (two terminals)
+pnpm --filter @dvs/contracts node
+pnpm --filter @dvs/contracts deploy:local   # then copy the printed addresses into backend/.env
+
 # Backend API (hot-reload)
 pnpm --filter @dvs/backend dev:api
 
@@ -86,10 +113,6 @@ pnpm --filter @dvs/backend dev:worker
 
 # Frontend dev server
 pnpm --filter @dvs/frontend dev
-
-# Contracts: local Hardhat node + compile
-pnpm --filter @dvs/contracts node      # in one terminal
-pnpm --filter @dvs/contracts compile   # in another
 ```
 
 ## Testing

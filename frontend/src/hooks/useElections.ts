@@ -16,10 +16,12 @@ import { apiFetch } from "../lib/apiClient.js";
 
 export type ElectionLifecycleState =
   | "draft"
-  | "voting_scheduled"
+  | "registration_open"
+  | "registration_closed"
   | "voting_active"
   | "voting_ended"
-  | "result_finalized";
+  | "result_finalized"
+  | "archived";
 
 export interface ElectionSummary {
   id: string;
@@ -33,6 +35,10 @@ export interface ElectionSummary {
   endTime?: string;
   finalized?: boolean;
   candidateCount?: number;
+  registrationClosedAt: string | null;
+  registrationClosedBy: string | null;
+  archivedAt: string | null;
+  archivedBy: string | null;
 }
 
 // 15s (user's call) — the mirror this reads from can lag the chain by up

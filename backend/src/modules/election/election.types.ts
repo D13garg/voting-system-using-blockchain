@@ -3,25 +3,39 @@
 // NOT vote tallying/results, which belongs to the Voting module per the
 // same section).
 //
-// SCOPE NOTE on lifecycle state (architecture Section 16 defines 8
-// states: Draft, Registration Open, Registration Closed, Voting
-// Scheduled, Voting Active, Voting Ended, Result Finalized, Archived).
-// This module can only compute a subset of those right now:
-// Registration Open/Closed depend on a voter-registration-request
-// workflow that lives in the not-yet-built Admin module, and Archived
-// depends on an archiving policy nothing has defined yet. Until those
-// exist, this module collapses "not yet on-chain" to "draft" and
-// everything from on-chain creation through finalization into the four
-// states below, computed live from on-chain timing rather than stored.
-// Revisit this enum when the Admin module's registration workflow and an
-// archiving policy exist - see HANDOFF.md for the design-fork discussion
-// this simplification came out of.
+// LIFECYCLE STATE (architecture Section 16 defines 8 states: Draft,
+// Registration Open, Registration Closed, Voting Scheduled, Voting
+// Active, Voting Ended, Result Finalized, Archived). This module now
+// computes 7 of those 8 - "Voting Scheduled" is deliberately folded into
+// "registration_closed" rather than kept as a separate value: Election.sol's
+// createElection() sets startTime AND endTime together in one call, so
+// there's no on-chain moment that could split "registration just closed,
+// still waiting for start" from "waiting for start" as two procedurally
+// different windows - Section 16's own table gives them no distinct
+// backend responsibility beyond "reject new [registration] requests",
+// which registration_closed already covers for its entire duration.
+// Keeping a same-meaning extra enum value around would just be a second
+// name for the same real-world period. Noting this here rather than
+// letting it silently diverge from Section 16's diagram - see HANDOFF.md
+// for the fuller design-fork discussion.
+//
+// Registration Open -> Registration Closed and Result Finalized ->
+// Archived are both explicit admin actions (election.service.ts's
+// closeRegistration/archiveElection), not automatic/time-based - see
+// those functions' own comments for why. Registration additionally
+// auto-closes as a safety net once startTime passes even if the admin
+// never explicitly closed it (computeLifecycleState checks the
+// startTime/endTime window before the registrationClosedAt field), so
+// the displayed state can never be stuck showing "registration_open"
+// once voting has actually started.
 export type ElectionLifecycleState =
   | "draft"
-  | "voting_scheduled"
+  | "registration_open"
+  | "registration_closed"
   | "voting_active"
   | "voting_ended"
-  | "result_finalized";
+  | "result_finalized"
+  | "archived";
 
 /**
  * The API-facing shape of an election: off-chain draft metadata
@@ -43,4 +57,12 @@ export interface ElectionSummary {
   endTime?: string;
   finalized?: boolean;
   candidateCount?: number;
+  /** ISO timestamp of the explicit "Close Registration" action, or null if registration hasn't been closed yet. */
+  registrationClosedAt: string | null;
+  /** Wallet address of the admin who closed registration, or null. */
+  registrationClosedBy: string | null;
+  /** ISO timestamp of the explicit "Archive" action, or null if not archived. */
+  archivedAt: string | null;
+  /** Wallet address of the admin who archived the election, or null. */
+  archivedBy: string | null;
 }

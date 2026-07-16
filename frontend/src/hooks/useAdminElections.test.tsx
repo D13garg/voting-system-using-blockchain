@@ -20,6 +20,10 @@ function makeElection(overrides: Partial<ElectionSummary>): ElectionSummary {
     state: "draft",
     createdBy: "0x1",
     createdAt: "2026-01-01",
+    registrationClosedAt: null,
+    registrationClosedBy: null,
+    archivedAt: null,
+    archivedBy: null,
     ...overrides,
   };
 }

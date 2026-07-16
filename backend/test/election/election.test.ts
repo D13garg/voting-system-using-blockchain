@@ -458,7 +458,12 @@ describe("Election module - PATCH /elections/draft/:id/link-onchain", () => {
       .send({ electionId: 5, transactionHash: "0x" + "b".repeat(64) });
 
     expect(res.status).toBe(200);
-    expect(res.body.election).toMatchObject({ electionId: 5, state: "voting_scheduled" });
+    expect(res.body.election).toMatchObject({
+      electionId: 5,
+      state: "registration_open",
+      registrationClosedAt: null,
+      archivedAt: null,
+    });
 
     const stored = await ElectionMetadataModel.findById(draft._id);
     expect(stored?.electionId).toBe(5);
@@ -508,5 +513,160 @@ describe("Election module - PATCH /elections/draft/:id/link-onchain", () => {
 
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe("ELECTION_ALREADY_LINKED");
+  });
+});
+
+describe("Election module - lifecycle state computation for registration_closed/archived", () => {
+  it("reports 'registration_closed' once registrationClosedAt is set and startTime hasn't passed", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    await seedMirror({ electionId: 0, title: "Election", startTime: now + 3600, endTime: now + 7200 });
+    await ElectionMetadataModel.create({
+      title: "Election",
+      description: "desc",
+      createdBy: "0xabc",
+      electionId: 0,
+      linkTransactionHash: "0x" + "a".repeat(64),
+      registrationClosedAt: new Date(),
+      registrationClosedBy: "0xabc",
+    });
+
+    const res = await request(app).get("/elections");
+    expect(res.body.elections[0]).toMatchObject({ state: "registration_closed", registrationClosedBy: "0xabc" });
+  });
+
+  it("startTime safety net: reports 'voting_active' once startTime passes even if registration was never explicitly closed", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    await seedMirror({ electionId: 0, title: "Election", startTime: now - 60, endTime: now + 3600 });
+    await ElectionMetadataModel.create({
+      title: "Election",
+      description: "desc",
+      createdBy: "0xabc",
+      electionId: 0,
+      linkTransactionHash: "0x" + "a".repeat(64),
+      // registrationClosedAt deliberately left null - admin never closed it
+    });
+
+    const res = await request(app).get("/elections");
+    expect(res.body.elections[0]).toMatchObject({ state: "voting_active", registrationClosedAt: null });
+  });
+
+  it("reports 'archived' once archivedAt is set, taking precedence over result_finalized", async () => {
+    await seedMirror({ electionId: 0, title: "Election", startTime: 1, endTime: 2, finalized: true });
+    await ElectionMetadataModel.create({
+      title: "Election",
+      description: "desc",
+      createdBy: "0xabc",
+      electionId: 0,
+      linkTransactionHash: "0x" + "a".repeat(64),
+      archivedAt: new Date(),
+      archivedBy: "0xabc",
+    });
+
+    const res = await request(app).get("/elections");
+    expect(res.body.elections[0]).toMatchObject({ state: "archived", archivedBy: "0xabc" });
+  });
+});
+
+describe("Election module - PATCH /elections/draft/:id/close-registration", () => {
+  it("closes registration from registration_open", async () => {
+    const { cookie, address } = await getAuthenticatedCookie();
+    const now = Math.floor(Date.now() / 1000);
+    await seedMirror({ electionId: 0, title: "Election", startTime: now + 3600, endTime: now + 7200 });
+    const draft = await ElectionMetadataModel.create({
+      title: "Election",
+      description: "desc",
+      createdBy: address,
+      electionId: 0,
+      linkTransactionHash: "0x" + "a".repeat(64),
+    });
+
+    const res = await request(app)
+      .patch(`/elections/draft/${draft._id.toString()}/close-registration`)
+      .set("Cookie", cookie);
+
+    expect(res.status).toBe(200);
+    expect(res.body.election).toMatchObject({ state: "registration_closed", registrationClosedBy: address });
+
+    const stored = await ElectionMetadataModel.findById(draft._id);
+    expect(stored?.registrationClosedAt).not.toBeNull();
+  });
+
+  it("returns 409 when the election isn't in registration_open (e.g. still a draft)", async () => {
+    const { cookie, address } = await getAuthenticatedCookie();
+    const draft = await ElectionMetadataModel.create({
+      title: "Draft",
+      description: "desc",
+      createdBy: address,
+      electionId: null,
+      linkTransactionHash: null,
+    });
+
+    const res = await request(app)
+      .patch(`/elections/draft/${draft._id.toString()}/close-registration`)
+      .set("Cookie", cookie);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("ELECTION_NOT_REGISTRATION_OPEN");
+  });
+
+  it("returns 404 for a nonexistent draft id", async () => {
+    const { cookie } = await getAuthenticatedCookie();
+    const fakeId = new mongoose.Types.ObjectId().toString();
+    const res = await request(app).patch(`/elections/draft/${fakeId}/close-registration`).set("Cookie", cookie);
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("ELECTION_NOT_FOUND");
+  });
+
+  it("rejects an unauthenticated request with 401", async () => {
+    const res = await request(app).patch(`/elections/draft/${new mongoose.Types.ObjectId().toString()}/close-registration`);
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("Election module - PATCH /elections/draft/:id/archive", () => {
+  it("archives a finalized election", async () => {
+    const { cookie, address } = await getAuthenticatedCookie();
+    await seedMirror({ electionId: 0, title: "Election", startTime: 1, endTime: 2, finalized: true });
+    const draft = await ElectionMetadataModel.create({
+      title: "Election",
+      description: "desc",
+      createdBy: address,
+      electionId: 0,
+      linkTransactionHash: "0x" + "a".repeat(64),
+    });
+
+    const res = await request(app).patch(`/elections/draft/${draft._id.toString()}/archive`).set("Cookie", cookie);
+
+    expect(res.status).toBe(200);
+    expect(res.body.election).toMatchObject({ state: "archived", archivedBy: address });
+
+    const stored = await ElectionMetadataModel.findById(draft._id);
+    expect(stored?.archivedAt).not.toBeNull();
+  });
+
+  it("returns 409 when the election isn't finalized yet", async () => {
+    const { cookie, address } = await getAuthenticatedCookie();
+    const now = Math.floor(Date.now() / 1000);
+    await seedMirror({ electionId: 0, title: "Election", startTime: now - 3600, endTime: now + 3600 });
+    const draft = await ElectionMetadataModel.create({
+      title: "Election",
+      description: "desc",
+      createdBy: address,
+      electionId: 0,
+      linkTransactionHash: "0x" + "a".repeat(64),
+    });
+
+    const res = await request(app).patch(`/elections/draft/${draft._id.toString()}/archive`).set("Cookie", cookie);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("ELECTION_NOT_FINALIZED");
+  });
+
+  it("returns 404 for a nonexistent draft id", async () => {
+    const { cookie } = await getAuthenticatedCookie();
+    const fakeId = new mongoose.Types.ObjectId().toString();
+    const res = await request(app).patch(`/elections/draft/${fakeId}/archive`).set("Cookie", cookie);
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("ELECTION_NOT_FOUND");
   });
 });

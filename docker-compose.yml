@@ -44,7 +44,16 @@ services:
     container_name: dvs-api
     restart: unless-stopped
     env_file:
-      - ./backend/.env
+      # required: false, not a bare path - docker-compose.dev.yml's
+      # overlay appends its own (required) backend/.env.docker entry to
+      # this list rather than replacing it (Compose merges env_file
+      # across -f files, it doesn't override it), so this file must not
+      # hard-fail when it's missing, or anyone using only the dev
+      # overlay - which has no reason to have backend/.env at all - hits
+      # a "file not found" error for a file they were never told to
+      # create.
+      - path: ./backend/.env
+        required: false
     ports:
       - "4000:4000"
     depends_on:
@@ -60,7 +69,8 @@ services:
     container_name: dvs-worker
     restart: unless-stopped
     env_file:
-      - ./backend/.env
+      - path: ./backend/.env
+        required: false
     depends_on:
       mongodb:
         condition: service_healthy

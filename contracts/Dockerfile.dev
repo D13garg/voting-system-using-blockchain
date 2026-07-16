@@ -1,0 +1,32 @@
+# Local-dev-only image for the `chain` service (docker-compose.dev.yml):
+# a Hardhat node with contracts auto-deployed against it on start. Not
+# used for anything production - there is no "deploy Sepolia via Docker"
+# story, and shouldn't be; Sepolia deployment is a deliberate, manual,
+# credential-bearing act (contracts/scripts/deploy.ts's own deploy:sepolia
+# script), not something to automate into a container that starts on
+# every `docker compose up`.
+#
+# Built from the REPO ROOT (see docker-compose.dev.yml's `context: .`),
+# not from ./contracts the way Dockerfile.api/worker build from
+# ./backend - this is a real pnpm workspace (single root lockfile, no
+# per-package lockfiles), so `pnpm install --filter` needs every
+# workspace member's package.json visible to resolve the dependency
+# graph, even though only @dvs/contracts's own deps actually get
+# installed.
+FROM node:22-alpine
+WORKDIR /app
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY contracts/package.json contracts/package.json
+COPY backend/package.json backend/package.json
+COPY frontend/package.json frontend/package.json
+RUN pnpm install --frozen-lockfile --filter @dvs/contracts...
+
+COPY contracts contracts
+
+WORKDIR /app/contracts
+RUN chmod +x docker/chain-entrypoint.sh
+
+EXPOSE 8545
+ENTRYPOINT ["docker/chain-entrypoint.sh"]

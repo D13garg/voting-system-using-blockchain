@@ -10,9 +10,15 @@ import { ElectionCard } from "../components/ElectionCard.js";
 // alphabetical, not the lifecycle's chronological order. A visitor's
 // first question is "what can I vote in right now", so that section
 // leads regardless of how few or many elections are in it.
+//
+// "archived" is deliberately not one of these sections - architecture
+// Section 16's table marks Archived as "Excluded from 'active' listings"
+// for Public Listing/Frontend Behavior; those live on ResultsArchive.tsx
+// instead (which already reuses this same useElections() data).
 const SECTIONS: { state: ElectionLifecycleState; heading: string }[] = [
   { state: "voting_active", heading: "Active now" },
-  { state: "voting_scheduled", heading: "Upcoming" },
+  { state: "registration_closed", heading: "Starting soon" },
+  { state: "registration_open", heading: "Registration open" },
   { state: "voting_ended", heading: "Awaiting results" },
   { state: "result_finalized", heading: "Recently finalized" },
 ];
