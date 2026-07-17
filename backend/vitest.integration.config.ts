@@ -1,4 +1,7 @@
+import { config } from "dotenv";
 import { defineConfig } from "vitest/config";
+
+config({ path: ".env.test" });
 
 // Separate config for the Phase 3 blockchain integration test
 // (test/integration/blockchain.integration.test.ts). Run via

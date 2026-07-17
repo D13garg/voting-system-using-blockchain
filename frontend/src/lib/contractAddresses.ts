@@ -15,11 +15,11 @@ interface ChainContractAddresses {
   election: Address;
 }
 
-const raw = addressesJson as Record<string, { network: string; voterRegistry: string; election: string }>;
+const raw = addressesJson as unknown as Record<string, { network: string; voterRegistry: string; election: string }>;
 
 /**
  * Returns the VoterRegistry/Election addresses for a given chain ID.
- * Throws if the chain isn't configured or an address is malformed — same
+ * Throws if the chain isn't configured or an address is malforme d— same
  * "fail loudly at startup, not silently at call time" principle as
  * env.ts's zod validation backend-side.
  */

@@ -38,28 +38,45 @@ export function readContractAddresses(filePath: string): ContractAddresses {
   }
 
   const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-  return assertIsContractAddresses(parsed, filePath);
+  return sanitizeContractAddresses(parsed, filePath);
 }
 
-function assertIsContractAddresses(value: unknown, sourcePath: string): ContractAddresses {
+/**
+ * Drops (with a warning), rather than hard-failing on, any entry that
+ * doesn't match the current schema - this file accumulates entries
+ * across chains and across time (a local deploy today, a Sepolia deploy
+ * from months ago, etc.), and a single stale entry left over from before
+ * a schema change (e.g. an old entry keyed by network name instead of
+ * chain ID, missing the newer `network` field) would otherwise crash
+ * every future deploy to every chain until someone manually finds and
+ * deletes the file - a bad failure mode for a file whose entire purpose
+ * is to make redeploying easy. A malformed *root* (not even an object)
+ * still throws, since there's nothing sensible to salvage from that.
+ */
+function sanitizeContractAddresses(value: unknown, sourcePath: string): ContractAddresses {
   if (typeof value !== "object" || value === null) {
     throw new Error(`Malformed contract-addresses.json at ${sourcePath}: expected an object.`);
   }
 
+  const result: ContractAddresses = {};
+
   for (const [chainIdKey, entry] of Object.entries(value)) {
-    if (
-      typeof entry !== "object" ||
-      entry === null ||
-      typeof (entry as Record<string, unknown>).network !== "string" ||
-      typeof (entry as Record<string, unknown>).chainId !== "number" ||
-      typeof (entry as Record<string, unknown>).voterRegistry !== "string" ||
-      typeof (entry as Record<string, unknown>).election !== "string"
-    ) {
-      throw new Error(
-        `Malformed contract-addresses.json at ${sourcePath}: entry for chain "${chainIdKey}" is missing required fields (network, chainId, voterRegistry, election).`,
+    const isValid =
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as Record<string, unknown>).network === "string" &&
+      typeof (entry as Record<string, unknown>).chainId === "number" &&
+      typeof (entry as Record<string, unknown>).voterRegistry === "string" &&
+      typeof (entry as Record<string, unknown>).election === "string";
+
+    if (isValid) {
+      result[chainIdKey] = entry as ContractAddresses[string];
+    } else {
+      console.warn(
+        `Skipping malformed/outdated entry for "${chainIdKey}" in ${sourcePath} (missing required fields, or from before a schema change) - it will be overwritten on the next deploy to that chain.`,
       );
     }
   }
 
-  return value as ContractAddresses;
+  return result;
 }

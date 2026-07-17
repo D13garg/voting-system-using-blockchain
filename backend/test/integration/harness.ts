@@ -183,13 +183,16 @@ export async function setup(): Promise<SeededChainState> {
   }
 
   const addresses = readAddresses();
-  const localhost = addresses.localhost;
-  if (!localhost) {
+  // Keyed by chain ID (31337 for viem's `hardhat` chain, matching
+  // deploy.ts's write), not network name - see
+  // contracts/scripts/contractAddresses.ts's header comment for why.
+  const localChain = addresses[String(hardhat.id)];
+  if (!localChain) {
     await teardown();
-    throw new Error(`Deploy succeeded but shared/contract-addresses.json has no "localhost" entry.`);
+    throw new Error(`Deploy succeeded but shared/contract-addresses.json has no "${hardhat.id}" entry.`);
   }
 
-  const [deployerAddress] = await publicClient.request({ method: "eth_accounts", params: [] });
+  const [deployerAddress] = await (publicClient as any).request({ method: "eth_accounts", params: [] }) as Address[];
   const deployerWalletClient: WalletClient = createWalletClient({
     account: deployerAddress as Address,
     chain: hardhat,
@@ -208,8 +211,8 @@ export async function setup(): Promise<SeededChainState> {
     params: [backendSignerAccount.address, "0x56BC75E2D63100000"] as never, // 100 ETH
   });
 
-  const electionAddress = localhost.election as Address;
-  const voterRegistryAddress = localhost.voterRegistry as Address;
+  const electionAddress = localChain.election as Address;
+  const voterRegistryAddress = localChain.voterRegistry as Address;
   const electionAbi = electionAbiJson;
   const voterRegistryAbi = voterRegistryAbiJson;
 
@@ -381,7 +384,7 @@ function decodeElectionIdFromCreateReceipt(receipt: { logs: Log[] }, electionAbi
     try {
       const decoded = decodeEventLog({ abi: electionAbi as never, data: log.data, topics: log.topics });
       if (decoded.eventName === "ElectionCreated") {
-        return (decoded.args as { electionId: bigint }).electionId;
+        return (decoded.args as unknown as { electionId: bigint }).electionId;
       }
     } catch {
       continue;
