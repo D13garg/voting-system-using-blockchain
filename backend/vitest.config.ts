@@ -13,5 +13,6 @@ export default defineConfig({
     // vitest.integration.config.ts and test/integration/harness.ts.
     exclude: ["test/integration/**", "node_modules/**"],
     testTimeout: 15000,
+    fileParallelism: false,
   },
 });

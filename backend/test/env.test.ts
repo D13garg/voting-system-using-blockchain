@@ -25,6 +25,8 @@ describe("env config", () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
+    delete process.env.CHAIN_ID;
+    delete process.env.API_PORT;
   });
 
   afterEach(() => {
