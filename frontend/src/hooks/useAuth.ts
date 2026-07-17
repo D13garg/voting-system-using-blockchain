@@ -2,7 +2,11 @@
 // Flow", last step: "for admin/voter features, SIWE signature to
 // authenticate with backend"). Deliberately separate from wallet
 // *connection* (Wagmi/RainbowKit own that state entirely) — this hook
-// only owns the backend session on top of an already-connected wallet.
+// only owns the backend session on top of an already-connected wallet,
+// EXCEPT that it also clears that session when the wallet disconnects
+// (see the isConnectedRef effect below) — wallet connection and the
+// backend session are different lifecycles that need to end together
+// even though they don't start together.
 //
 // Request/response shapes match backend/src/modules/auth/auth.routes.ts
 // exactly: POST /auth/nonce -> { nonce }, POST /auth/siwe -> { message,
@@ -10,7 +14,7 @@
 // POST /auth/logout -> 204. The session itself is an httpOnly cookie
 // (apiClient.ts's credentials:"include" carries it); this hook never
 // touches the cookie directly.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAccount, useChainId, useSignMessage } from "wagmi";
 import { SiweMessage } from "siwe";
 import { apiFetch, ApiError } from "../lib/apiClient.js";
@@ -54,6 +58,35 @@ export function useAuth(): AuthState & { signIn: () => Promise<void>; signOut: (
       cancelled = true;
     };
   }, [walletAddress]);
+
+  // Clears the backend SIWE session when the wallet disconnects, however
+  // that happens — not just a "Disconnect" button this app controls, but
+  // also RainbowKit's own built-in account modal (WalletConnectButton.tsx
+  // uses openAccountModal for that, which only calls Wagmi's disconnect()
+  // — it has no idea this app also has its own /auth/logout session to
+  // clear), the wallet extension's own disconnect action, or an account
+  // switch that drops to zero accounts. Without this, the httpOnly
+  // session cookie stayed valid after any of those, so reconnecting the
+  // same wallet silently resumed "authenticated" with no fresh signature
+  // — from the user's side, "Disconnect" appeared to do nothing.
+  //
+  // isConnectedRef tracks the previous render's value so this only fires
+  // on a real true->false transition, not on cold mount (where
+  // isConnected starts false for a never-connected visitor and there is
+  // no session to clear).
+  const isConnectedRef = useRef(isConnected);
+  useEffect(() => {
+    const wasConnected = isConnectedRef.current;
+    isConnectedRef.current = isConnected;
+    if (wasConnected && !isConnected) {
+      apiFetch("/auth/logout", { method: "POST" }).catch(() => {
+        // Same reasoning as signOut() below — logout is idempotent
+        // server-side, a network error here shouldn't block clearing
+        // local state.
+      });
+      setState({ address: null, status: "idle", error: null });
+    }
+  }, [isConnected]);
 
   const signIn = useCallback(async () => {
     if (!isConnected || !walletAddress) {
