@@ -30,6 +30,7 @@
 
 import type { AbiEvent, Log, PublicClient } from "viem";
 import { getPublicClient } from "./provider.js";
+import { env } from "../../config/env.js";
 
 export interface LogSyncCheckpoint {
   /** The last block number that was successfully processed (inclusive). */
@@ -70,6 +71,19 @@ export interface LogSyncResult {
  * last-processed block's logs again on every call until the checkpoint
  * advances past it; this is intentional and must be handled idempotently
  * by the caller, not worked around here.
+ *
+ * Fetches in `env.RPC_GET_LOGS_MAX_BLOCK_RANGE`-sized chunks rather than
+ * one call spanning the whole fromBlock-to-currentBlock range - discovered
+ * necessary running against Sepolia via a free-tier Alchemy RPC, which
+ * hard-caps eth_getLogs at a 10-block range per call and rejects a larger
+ * range outright (no partial results), rather than a soft/throttled
+ * limit. This bites hardest exactly when it matters most: a fresh deploy
+ * or a worker that's been offline for a while, where the catch-up gap
+ * from the checkpoint to the current head is large. Chunks are fetched
+ * sequentially, not in parallel - deliberately gentle on a constrained
+ * RPC tier's rate limit; a large one-time backlog taking a few seconds
+ * longer is a fine trade for not tripping a separate rate-limit error on
+ * top of the range one.
  */
 export async function getNewLogs(params: {
   address: `0x${string}`;
@@ -80,13 +94,21 @@ export async function getNewLogs(params: {
   const client = params.client ?? getPublicClient();
 
   const currentBlock = await client.getBlockNumber();
+  const maxRange = BigInt(env.RPC_GET_LOGS_MAX_BLOCK_RANGE);
 
-  const logs = await client.getLogs({
-    address: params.address,
-    event: params.event,
-    fromBlock: params.checkpoint.lastProcessedBlock,
-    toBlock: currentBlock,
-  });
+  const logs: Log[] = [];
+  let chunkStart = params.checkpoint.lastProcessedBlock;
+  while (chunkStart <= currentBlock) {
+    const chunkEnd = chunkStart + maxRange - 1n < currentBlock ? chunkStart + maxRange - 1n : currentBlock;
+    const chunkLogs = await client.getLogs({
+      address: params.address,
+      event: params.event,
+      fromBlock: chunkStart,
+      toBlock: chunkEnd,
+    });
+    logs.push(...chunkLogs);
+    chunkStart = chunkEnd + 1n;
+  }
 
   return {
     logs,

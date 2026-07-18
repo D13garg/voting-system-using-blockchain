@@ -71,6 +71,19 @@ const envSchema = z.object({
   // the way WORKER_START_BLOCK's semantics are.
   WORKER_STALL_CRITICAL_MS: z.coerce.number().int().positive().default(600_000),
 
+  // Maximum block range per eth_getLogs call (src/modules/blockchain/
+  // events.ts's getNewLogs). Discovered necessary against Sepolia via a
+  // free-tier Alchemy RPC, which hard-caps eth_getLogs at a 10-block
+  // range - a single call spanning a larger catch-up gap (e.g. after a
+  // fresh deploy, or the worker being offline a while) fails outright
+  // with an InvalidRequestRpcError rather than partially succeeding.
+  // Configurable rather than hardcoded because this is a property of
+  // the configured RPC provider/tier, not a fixed protocol constant - a
+  // paid tier or a different provider may allow a much larger range,
+  // and hardcoding the most conservative known limit would leave
+  // needless round-trips on the table for anyone with better RPC access.
+  RPC_GET_LOGS_MAX_BLOCK_RANGE: z.coerce.number().int().positive().default(10),
+
   // Gap #7 (election-start reminder). ELECTION_START_SCAN_INTERVAL_MS is
   // the BullMQ repeatable job's own interval - how often the scan runs,
   // not how far in advance it warns. ELECTION_START_REMINDER_LEAD_TIME_MS
@@ -125,7 +138,7 @@ const envSchema = z.object({
 
 
 
-  
+
 });
 
 export type Env = z.infer<typeof envSchema>;
