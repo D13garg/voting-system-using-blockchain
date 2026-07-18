@@ -1509,3 +1509,126 @@ diagram is sourced from. **All 5 pre-frontend items are now closed.**
     work that's unverified beyond careful manual tracing - running
     `pnpm dev` for real, end to end, on the user's own machine is the
     single most important next step before trusting this.
+
+17. **Docker dev stack: confirmed working end-to-end, after three real
+    bugs found via live debugging on the user's own machine** (continued
+    from item 16 - `pnpm dev` did NOT work first try, and it took several
+    rounds of the user pasting real `docker compose` output before all
+    three surfaced. Each had a different failure mode, none guessable
+    from the code alone).
+
+    **Bug 1 - `docker-compose.yml`'s `env_file` hard-required a file the
+    dev overlay has no reason to need.** Compose APPENDS `env_file`
+    lists across `-f` files rather than replacing them, so api/worker
+    were always trying to load both the native-dev `./backend/.env` AND
+    the dev-overlay's `./backend/.env.docker`. Fixed with the extended
+    `env_file` syntax (`path: ./backend/.env, required: false`) on the
+    base file's entry.
+
+    **Bug 2 - the chain-ID key mismatch (this doc's earlier "item 6"
+    gap, previously reverted per the user's request) turned out to be a
+    real, reproducible blocker for the Docker stack, not just a latent
+    Sepolia-deployment concern.** Re-applied: `contractAddresses.ts`/
+    `deploy.ts`/`verify.ts` key `shared/contract-addresses.json` by chain
+    ID again (`network` kept as a field on the entry, not the key) -
+    this is where the file's shape stands now, don't revert it again
+    without checking `frontend/src/lib/contractAddresses.ts`'s lookup
+    first, since that's the thing it has to match.
+
+    **Bug 3 - a single stale entry in `shared/contract-addresses.json`
+    could permanently brick every future deploy.** After bug 2's fix,
+    `deploy.ts` started throwing `Malformed contract-addresses.json ...
+    entry for chain "localhost" is missing required fields` - a leftover
+    pre-bug-2 entry poisoned the whole file, since
+    `contractAddresses.ts`'s validator threw on the first bad entry it
+    found, crashing the whole read. Fixed by rewriting it
+    (`sanitizeContractAddresses`) to drop-and-`console.warn` a bad entry
+    instead of throwing - this file accumulates entries across chains
+    and across time, and one stale entry from before a schema change
+    shouldn't be able to hard-fail every future deploy to every chain.
+
+    **Bug 4 (found afterward, via a real `pnpm test:integration` CI
+    run) - `backend/test/integration/harness.ts` still read the
+    addresses file the old way** (`addresses.localhost`), missed when
+    bug 2 was re-applied since this file lives outside
+    `contracts/scripts` and `frontend/src/lib`. Fixed to
+    `addresses[String(hardhat.id)]`, matching bug 2's fix. A repo-wide
+    grep for `\.localhost\b` confirmed no other stale reads remain.
+
+    **Also fixed:** `dev.sh` originally ran the Docker stack and the
+    frontend as two unrelated background jobs with no link between them
+    - if Docker failed or exited early, the frontend kept running
+    uselessly with no error surfaced. Added a watchdog subshell (`wait
+    $DOCKER_PID` in the background, `kill 0` + a loud message on
+    non-zero exit) - portable `wait $PID` form, not bash 4.3+'s `wait
+    -n`, since macOS's default `/bin/bash` is still 3.2.
+
+    **Status: CONFIRMED WORKING END TO END** on the user's machine after
+    all four bugs above - `pnpm dev` brings up the full stack, the
+    frontend loads elections from the local chain, and `/admin` correctly
+    gated on-chain role check against Sepolia vs localhost (the "wallet
+    does not hold the on-chain administrator role" message the user saw
+    was CORRECT behavior - they were connected to Sepolia, where nothing
+    is deployed, not a bug). This closes out item 16's "unverified beyond
+    careful manual tracing" caveat.
+
+18. **Wallet disconnect didn't clear the backend SIWE session - fix
+    written, NOT yet confirmed resolved.** Root cause:
+    `WalletConnectButton.tsx` uses RainbowKit's own built-in account
+    modal (`openAccountModal`) for the connected-wallet UI: its
+    "Disconnect" button only knows about Wagmi's own `disconnect()` -
+    it has no idea this app also has an independent backend session
+    (`useAuth.ts`, an httpOnly cookie via `/auth/logout`). So
+    disconnecting through that modal dropped the wallet connection but
+    left the session cookie valid; reconnecting the same wallet silently
+    resumed "authenticated" with no fresh signature required - from the
+    user's side, "Disconnect" appeared to do nothing.
+
+    Fix applied in `useAuth.ts`: an effect watching Wagmi's `isConnected`
+    for a true→false transition (via an `isConnectedRef`, guarded so it
+    only fires on a real transition, not on cold mount for a
+    never-connected visitor) that calls `POST /auth/logout` and clears
+    local state whenever the wallet disconnects, by whatever path -
+    RainbowKit's modal, the wallet extension itself, or an account
+    switch that drops to zero accounts - not just a button this app
+    controls. Covered by `useAuth.test.tsx` (3 tests, all passing in
+    isolation: session-restore-on-mount, no-spurious-logout-on-cold-mount,
+    and a direct reproduction of the bug itself).
+
+    **This fix IS present in the user's current "fully working" zip**
+    (confirmed: `useAuth.ts` has the `isConnectedRef` effect) - but the
+    user reports the logout issue as still open as of that snapshot, to
+    be investigated next. `useAuth.test.tsx` was NOT carried into that
+    zip, only `useAuth.ts` itself - re-add the test file first thing
+    next session so there's a regression harness to work against, rather
+    than re-diagnosing blind. Things worth checking, roughly in order of
+    likelihood: (a) whether `signIn()`'s own success path or some other
+    effect in `useAuth.ts` re-triggers a session check shortly after
+    logout and silently re-authenticates from a still-valid cookie server
+    -side (i.e. is `/auth/logout` actually invalidating the session on
+    the *backend*, not just being called from the frontend - worth
+    checking `backend/src/modules/auth/auth.routes.ts`'s logout handler
+    directly); (b) whether disconnecting via a path OTHER than
+    RainbowKit's account modal (e.g. switching accounts directly in the
+    wallet extension while the app is open) still slips past the
+    isConnected-transition detection somehow; (c) whether there's a
+    second place in the frontend independently caching auth/role state
+    (e.g. a query cache that isn't being invalidated alongside
+    `useAuth`'s own state reset).
+
+    **Not carried into this zip:** the `viem` version-duplication fix
+    from later the same session (`pnpm-workspace.yaml`'s `overrides:`
+    section pinning `viem` to `2.53.1`, plus migrating the `ioredis`
+    override there too since `package.json`'s `pnpm.overrides` field has
+    been silently ignored this whole time - confirmed via the recurring
+    `[WARN] The "pnpm" field in package.json is no longer read by pnpm`
+    on every install). That was purely an editor-level TypeScript
+    diagnostic ("Two different types with this name exist, but they are
+    unrelated" on a `viem` `Chain`/`Client` type in
+    `backend/test/integration/harness.ts`) - `vitest` transforms via
+    esbuild and doesn't type-check, so it never blocked a real test run,
+    which is consistent w©ith the user calling this zip "fully working"
+    without it. Still real, still worth applying, just lower priority
+    than the disconnect issue - `package.json` in this zip still has the
+    non-functional `pnpm.overrides` block, `pnpm-workspace.yaml` has no
+    `overrides:` section yet.

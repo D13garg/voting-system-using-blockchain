@@ -35,7 +35,25 @@ export function useAuth(): AuthState & { signIn: () => Promise<void>; signOut: (
   // On mount (and whenever the connected wallet changes), check for an
   // existing session — a page refresh shouldn't force re-signing if the
   // cookie is still valid.
+  //
+  // Guarded on `!walletAddress` returning early: this effect is also keyed
+  // on `walletAddress`, which goes to `undefined` on disconnect at the same
+  // time `isConnected` flips false below — without this guard, disconnect
+  // triggered BOTH effects, and this one's in-flight GET /auth/session
+  // would resolve *after* the other effect's POST /auth/logout and
+  // silently overwrite its "idle" state back to "authenticated" (the
+  // walletAddress-mismatch check further down never caught it, since a
+  // falsy walletAddress skips that check entirely). Root cause of item
+  // 18's "Disconnect appeared to do nothing" bug — confirmed via
+  // useAuth.test.tsx's disconnect-transition test, not just reasoned
+  // about. There is no legitimate reason to ask the backend about a
+  // session for a wallet that isn't connected, so the fix is to simply
+  // never make that call in the first place, not to reorder/race-guard it.
   useEffect(() => {
+    if (!walletAddress) {
+      setState({ address: null, status: "idle", error: null });
+      return;
+    }
     let cancelled = false;
     setState((s) => ({ ...s, status: "checking", error: null }));
     apiFetch<{ address: string }>("/auth/session")
