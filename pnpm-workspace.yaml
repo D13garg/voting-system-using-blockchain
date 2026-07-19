@@ -3,6 +3,23 @@ packages:
   - "backend"
   - "frontend"
 
+# MOVED HERE FROM package.json's "pnpm.overrides" (2026-07-19, real CI
+# break found and fixed): pnpm 11 silently ignores the "pnpm" field in
+# package.json entirely (warning only, no hard error - see pnpm/pnpm#11536
+# and https://pnpm.io/migration). This wasn't just the viem override
+# added this session - the pre-existing ioredis pin silently stopped
+# applying too, which is what actually broke CI (bullmq resolved a second,
+# newer ioredis alongside the pinned one, producing the exact same kind
+# of duplicate-class TypeScript errors the viem fix was written to solve
+# in the first place). Confirmed by reproducing CI's exact pnpm version
+# (11, per .github/workflows/ci.yml's PNPM_VERSION) in-sandbox: with
+# overrides only in package.json, `pnpm install --frozen-lockfile`
+# resolved two ioredis versions (5.10.1 and 5.11.1); with them here
+# instead, only 5.10.1 remains. Don't move these back to package.json.
+overrides:
+  ioredis: "5.10.1"
+  viem: "^2.55.2"
+
 # Explicit allowlist for native build scripts. These are well-known,
 # legitimate Ethereum/crypto and infra dependencies (keccak/secp256k1 are
 # pulled in transitively by Hardhat/ethers; mongodb-memory-server downloads

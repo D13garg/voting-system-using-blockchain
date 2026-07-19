@@ -24,12 +24,6 @@
     "typescript": "^5.5.4",
     "typescript-eslint": "^8.3.0"
   },
-  "pnpm": {
-    "overrides": {
-      "ioredis": "5.10.1",
-      "viem": "^2.55.2"
-    }
-  },
   "dependencies": {
     "pnpm": "^11.11.0"
   }
