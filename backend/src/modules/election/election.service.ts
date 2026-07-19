@@ -264,6 +264,14 @@ export async function getElectionById(id: string): Promise<ElectionSummary> {
  */
 export async function getLifecycleStateByElectionId(electionId: number): Promise<ElectionLifecycleState> {
   const mirror = await IndexedElectionModel.findOne({ electionId });
+  // TEMPORARY DEBUG (remove once the 2026-07-19 CI failure is diagnosed):
+  console.error(
+    "[DEBUG getLifecycleStateByElectionId]",
+    JSON.stringify(
+      { electionId, mirrorFound: !!mirror, mirror: mirror ? mirror.toObject() : null },
+      (_key: string, value: unknown): unknown => (typeof value === "bigint" ? value.toString() : value),
+    ),
+  );
   if (!mirror || mirror.title === undefined || mirror.startTime === undefined || mirror.endTime === undefined) {
     throw new HttpError(
       404,
