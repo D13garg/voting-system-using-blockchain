@@ -26,7 +26,8 @@
   },
   "pnpm": {
     "overrides": {
-      "ioredis": "5.10.1"
+      "ioredis": "5.10.1",
+      "viem": "^2.55.2"
     }
   },
   "dependencies": {

@@ -47,18 +47,27 @@
 // Section 16's 8 values) - see that file's header comment for the full
 // model.
 //
-// NOT DONE, ON PURPOSE: admin.service.ts's submitRegistrationRequest does
-// not check registration_open before accepting a request, even though
-// Section 16's table describes that as Registration Closed's backend
-// responsibility. listElections/getElectionById above only ever iterate
-// ElectionMetadataModel (this backend's own Mongo drafts) - an election
-// that exists purely on-chain / via the IndexedElection mirror without a
-// corresponding draft (electionId's own doc comment on this) is
-// invisible to them. Gating registration on a listElections() lookup
-// would silently block real voter registration for exactly that case,
-// which VoterRegistry itself has no problem with. Enforcing this
-// correctly needs its own source of truth, not a shortcut through this
-// module - left as an explicitly open item rather than a quiet gap.
+// REGISTRATION GATE (2026-07-19, closes the gap this comment used to
+// describe as deliberately open): admin.service.ts's
+// submitRegistrationRequest now gates on getLifecycleStateByElectionId
+// below, NOT on listElections()/getElectionById() - those two only ever
+// iterate ElectionMetadataModel (this backend's own Mongo drafts), which
+// is exactly why gating through them would've silently blocked real
+// voter registration for an election that exists purely on-chain / via
+// the IndexedElection mirror without a corresponding draft.
+// getLifecycleStateByElectionId instead queries IndexedElection directly
+// by electionId (populated by the worker from ElectionCreated regardless
+// of whether a draft exists), and separately looks up
+// ElectionMetadataModel by electionId (not by _id) purely for
+// registrationClosedAt/archivedAt - defaulting both to null when no
+// draft exists, which correctly falls through computeLifecycleState's
+// own rule 7 default ("registration_open"). One accepted simplification:
+// fetchMirroredElection's "still syncing, retry shortly" 503 is keyed off
+// a draft's updatedAt (time since link) - with no draft to anchor that
+// here, a not-yet-indexed electionId just gets a plain 404 instead. Fine
+// for a request endpoint (looks retriable to the caller either way), not
+// necessarily fine if this function ever gets reused somewhere a softer
+// signal matters more.
 
 import { HttpError } from "../../shared/httpError.js";
 import { BlockchainError, RECOMMENDED_POLL_INTERVAL_MS } from "../blockchain/index.js";
@@ -241,6 +250,40 @@ export async function getElectionById(id: string): Promise<ElectionSummary> {
   return toSummary(doc, onChain, new Date());
 }
 
+/**
+ * Lifecycle state for a bare on-chain electionId, with no Mongo draft
+ * required - see this file's header comment (REGISTRATION GATE) for why
+ * this exists separately from listElections/getElectionById, which are
+ * draft-keyed and would wrongly miss an on-chain-only election entirely.
+ *
+ * Reads IndexedElection directly (the worker's mirror, keyed by
+ * electionId), then separately looks up an ElectionMetadataModel draft
+ * by electionId purely for registrationClosedAt/archivedAt - both
+ * default to null if no draft exists, which is the correct default (see
+ * computeLifecycleState's rule 7).
+ */
+export async function getLifecycleStateByElectionId(electionId: number): Promise<ElectionLifecycleState> {
+  const mirror = await IndexedElectionModel.findOne({ electionId });
+  if (!mirror || mirror.title === undefined || mirror.startTime === undefined || mirror.endTime === undefined) {
+    throw new HttpError(
+      404,
+      "ELECTION_NOT_FOUND",
+      `No indexed on-chain record found for electionId ${electionId}.`,
+    );
+  }
+
+  const onChain: OnChainElectionView = {
+    title: mirror.title,
+    startTime: mirror.startTime,
+    endTime: mirror.endTime,
+    finalized: mirror.finalized,
+    candidateCount: mirror.candidateIds.length,
+  };
+
+  const draft = await ElectionMetadataModel.findOne({ electionId });
+  return computeLifecycleState(onChain, new Date(), draft?.registrationClosedAt ?? null, draft?.archivedAt ?? null);
+}
+
 export async function createDraft(input: CreateDraftInput): Promise<ElectionSummary> {
   console.log("INPUT:", input);
 
@@ -249,21 +292,21 @@ export async function createDraft(input: CreateDraftInput): Promise<ElectionSumm
     ElectionMetadataModel.schema.obj.description
   );
   const data = {
-  title: input.title,
-  description: input.description,
-  createdBy: input.createdBy,
-  electionId: null,
-  linkTransactionHash: null,
-};
+    title: input.title,
+    description: input.description,
+    createdBy: input.createdBy,
+    electionId: null,
+    linkTransactionHash: null,
+  };
 
-const doc = new ElectionMetadataModel(data);
+  const doc = new ElectionMetadataModel(data);
 
-console.log("Before validate:", doc.toObject());
+  console.log("Before validate:", doc.toObject());
 
-const err = doc.validateSync();
-console.log("validateSync:", err);
+  const err = doc.validateSync();
+  console.log("validateSync:", err);
 
-await doc.save();
+  await doc.save();
   return toSummary(doc, undefined, new Date());
 }
 

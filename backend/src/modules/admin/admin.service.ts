@@ -44,7 +44,7 @@
 import { HttpError } from "../../shared/httpError.js";
 import { recordAuditLog } from "../audit/audit.service.js";
 import { getElectionContractClient } from "../blockchain/index.js";
-import { listElections } from "../election/election.service.js";
+import { getLifecycleStateByElectionId, listElections } from "../election/election.service.js";
 import type { ElectionSummary } from "../election/election.types.js";
 import { IndexedVoterRegistrationModel } from "../indexing/indexedVoterRegistration.model.js";
 import { hasVoted } from "../voting/voting.service.js";
@@ -104,6 +104,15 @@ async function toSummary(doc: RegistrationRequestDocument): Promise<Registration
  * given (electionId, voterAddress) pair.
  */
 export async function submitRegistrationRequest(input: SubmitRequestInput): Promise<RegistrationRequestDocument> {
+  const state = await getLifecycleStateByElectionId(input.electionId);
+  if (state !== "registration_open") {
+    throw new HttpError(
+      409,
+      "REGISTRATION_NOT_OPEN",
+      `Election ${input.electionId} is not accepting registration requests (current state: ${state}).`,
+    );
+  }
+
   const existingActive = await RegistrationRequestModel.findOne({
     electionId: input.electionId,
     voterAddress: input.voterAddress,

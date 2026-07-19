@@ -3,6 +3,19 @@ import { useChainId } from "wagmi";
 import { useCreateElectionOnChain } from "../../hooks/useCreateElectionOnChain.js";
 import { useLinkOnChain } from "../../hooks/useLinkOnChain.js";
 
+// MINIMUM_START_BUFFER_MS (2026-07-19 fix, real bug found during the
+// Sepolia smoke test): Election.sol's addCandidate() unconditionally
+// reverts with CannotAddCandidateAfterVotingStarts once
+// block.timestamp >= startTime - there is no contract-level way to move
+// startTime once createElection() has mined. A startTime that doesn't
+// leave enough real wall-clock time to get through this wizard's own
+// remaining Candidates step therefore guarantees a permanently unusable
+// election (zero candidates, forever) - there's no legitimate case for
+// allowing it, so this is a hard block, not just a warning. 30 minutes
+// comfortably covers wallet-confirmation time plus Sepolia's ~12s block
+// time for both the createElection() and addCandidate() txs.
+const MINIMUM_START_BUFFER_MS = 30 * 60 * 1000;
+
 interface LinkStepProps {
   draftId: string;
   title: string;
@@ -13,6 +26,7 @@ export function LinkStep({ draftId, title, onLinked }: LinkStepProps): JSX.Eleme
   const chainId = useChainId();
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
+  const [validationError, setValidationError] = useState<string | null>(null);
   const create = useCreateElectionOnChain(chainId);
   const link = useLinkOnChain();
   const handledTxHash = useRef<string | null>(null);
@@ -35,6 +49,16 @@ export function LinkStep({ draftId, title, onLinked }: LinkStepProps): JSX.Eleme
 
   function handleSubmit(e: React.FormEvent): void {
     e.preventDefault();
+    setValidationError(null);
+
+    const startTimeMs = new Date(startTime).getTime();
+    if (startTimeMs - Date.now() < MINIMUM_START_BUFFER_MS) {
+      setValidationError(
+        "Voting start needs to be at least 30 minutes from now — otherwise there's no time left to add candidates before voting opens, and this election can never be fixed once that happens.",
+      );
+      return;
+    }
+
     create.createElectionOnChain(title, new Date(startTime), new Date(endTime));
   }
 
@@ -74,9 +98,9 @@ export function LinkStep({ draftId, title, onLinked }: LinkStepProps): JSX.Eleme
         />
       </div>
 
-      {(create.error ?? link.error) && (
+      {(validationError ?? create.error ?? link.error) && (
         <p className="bg-danger-subtle rounded-md p-3 text-sm text-danger">
-          {create.error ?? link.error?.message}
+          {validationError ?? create.error ?? link.error?.message}
         </p>
       )}
 
